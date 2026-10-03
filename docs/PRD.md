@@ -327,6 +327,8 @@ Proposal, to be confirmed in M0.
 | renderer | three.js | one renderer for website, Quest and Android, with solid WebXR support |
 | globe and 3D Tiles | 3DTilesRendererJS (with its globe/ellipsoid support) | WGS84 terrain and 3D Tiles in three.js |
 | splats | a three.js Gaussian splat renderer (to pick in the spike) | splats in the same scene as meshes |
+| terrain | Copernicus GLO-30 (GLO-90 where GLO-30 has no tile), tiled as a LOD pyramid | open, global, 30 m; far LODs are computed from it |
+| sea floor | ETOPO 2022 (NOAA), optional layer on the website only | shows shipwrecks and submerged sites in place; not used in AR; in VR only as a far LOD |
 | 3D content | 3D Tiles 1.1 with glTF meshes and Gaussian splats | one streaming format for scans and splats |
 | XR | WebXR (`immersive-vr` on Quest, `immersive-ar` on Android) | one code base for VR, AR and the website |
 | packaging | PWA for the Meta Horizon Store; Trusted Web Activity (Bubblewrap) for Google Play | store apps without a native engine |
