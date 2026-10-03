@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { GlobeControls, View } from "./controls";
 import { Vec3, dot, ecef, enu, geodetic, length, sub, yearLabel } from "./geo";
 import { CATEGORY_COLORS, Site, Sites } from "./sites";
+import { AdaptiveQuality, Device, Profile, detectDevice, pickProfile } from "./quality";
 import { Terrain } from "./terrain";
 
 const PLACES: { name: string; note: string; view: View }[] = [
@@ -16,8 +17,14 @@ const PLACES: { name: string; note: string; view: View }[] = [
 ];
 
 const el = document.getElementById("view")!;
-const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+// The renderer is created after device detection, which picks antialiasing
+// and resolution (quality.ts).
+const device: Device = await detectDevice();
+const profile: Profile = pickProfile(device);
+const adaptive = new AdaptiveQuality(profile);
+const renderer = new THREE.WebGLRenderer({ antialias: profile.antialias, logarithmicDepthBuffer: true });
+const basePixelRatio = Math.min(window.devicePixelRatio, profile.maxPixelRatio);
+renderer.setPixelRatio(basePixelRatio);
 renderer.setClearColor(0x050608);
 el.appendChild(renderer.domElement);
 
@@ -110,6 +117,13 @@ const stats = document.getElementById("stats")!;
 let frame = 0;
 
 function tick(now: number): void {
+  adaptive.frame(now);
+  terrain.quality.sse = adaptive.sse;
+  const ratio = basePixelRatio * adaptive.scale;
+  if (Math.abs(renderer.getPixelRatio() - ratio) > 0.01) {
+    renderer.setPixelRatio(ratio);
+    resize();
+  }
   const cam = controls.update(now);
   lastCam = cam;
   const target = controls.target();
@@ -152,12 +166,32 @@ function tick(now: number): void {
       controls.range *= 1.15;
     }
     const s = terrain.stats;
-    stats.textContent = `tiles ${s.rendered} drawn · level ${s.maxLevel} · ${s.loading} loading · ${s.gpuMB} MB · ${s.downloads} downloaded · ${s.hits} from cache · ${s.wasted} unused · ${s.aborted} aborted · ${controls.lat.toFixed(4)}, ${controls.lon.toFixed(4)} · ${Math.round(controls.range)} m`;
+    stats.textContent = `${profile.name} · ${Math.round(adaptive.fps)} fps · detail ${adaptive.sse.toFixed(1)} px · scale ${adaptive.scale.toFixed(2)} · tiles ${s.rendered} drawn · level ${s.maxLevel} · ${s.loading} loading · ${s.gpuMB} MB · ${s.downloads} downloaded · ${s.hits} from cache · ${s.wasted} unused · ${s.aborted} aborted · ${controls.lat.toFixed(4)}, ${controls.lon.toFixed(4)} · ${Math.round(controls.range)} m`;
   }
   requestAnimationFrame(tick);
 }
 
+/** AR or VR entry, offered only where WebXR supports it (PRD §4.2). */
+function showXr(d: Device): void {
+  const box = document.getElementById("xr")!;
+  const modes = [d.ar && "AR", d.vr && "VR"].filter(Boolean) as string[];
+  if (!modes.length) return;
+  box.hidden = false;
+  for (const m of modes) {
+    const b = document.createElement("button");
+    b.textContent = m === "AR" ? "View in AR" : "Enter VR";
+    // Browsers allow XR sessions only from a user tap; the sessions
+    // themselves come with milestone M4.
+    b.onclick = () => alert(`${m} mode comes with milestone M4 (see docs/ROADMAP.md).`);
+    box.appendChild(b);
+  }
+}
+
 async function main(): Promise<void> {
+  terrain.quality = {
+    sse: profile.sse, imagePx: profile.imagePx, budgetBytes: profile.budgetMB * 2 ** 20, meshStep: profile.meshStep,
+  };
+  showXr(device);
   await terrain.init();
   await sites.load(`${import.meta.env.BASE_URL}data/sites.json`);
   const legend = document.getElementById("legend")!;
@@ -180,5 +214,5 @@ async function main(): Promise<void> {
 main();
 
 if (import.meta.env.DEV) {
-  Object.assign(window, { atlas: { terrain, sites, controls, camera, renderer, scene } });
+  Object.assign(window, { atlas: { terrain, sites, controls, camera, renderer, scene, device, profile, adaptive } });
 }

@@ -16,9 +16,7 @@ const TERRAIN_URL = `${BASE}tiles/terrain`;
 const EOX_URL = "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless/default/WGS84";
 const DOP40_URL = "https://geoservices.bayern.de/od/wms/dop/v1/dop40";
 
-const MAX_SSE = 2.5;              // refine while a height sample spans more pixels
 const MAX_LOADS = 10;             // concurrent tile loads
-const GPU_BUDGET = 300 * 2 ** 20; // bytes of geometry and textures kept
 const ABORT_AFTER = 30;           // frames a loading tile may go unused
 const MAX_HEIGHT = 9000;          // upper bound before a tile's heights are known
 const MIN_HEIGHT = -500;
@@ -146,6 +144,8 @@ export class Terrain {
   private cam: Vec3 = [0, 0, 0];
   private nadir: [number, number, number] = [0, 0, 0];
   private view: Vec3 = [0, 0, 1];
+  /** Set from the device profile and adapted to the frame rate (quality.ts). */
+  quality = { sse: 2.5, imagePx: 512, budgetBytes: 300 * 2 ** 20, meshStep: 1 };
   stats = { rendered: 0, loading: 0, maxLevel: 0, gpuMB: 0, hits: 0, downloads: 0, wasted: 0, aborted: 0 };
 
   async init(): Promise<void> {
@@ -205,7 +205,7 @@ export class Terrain {
         return;
       }
       const sse = (t.error * k) / this.distance(t);
-      if (sse > MAX_SSE && this.canRefine(t)) {
+      if (sse > this.quality.sse && this.canRefine(t)) {
         t.kids ??= [0, 1].flatMap((j) => [0, 1].map((i) => this.tile(t.z + 1, 2 * t.x + i, 2 * t.y + j, t)));
         const live = t.kids.filter((c) => !this.culled(c));
         for (const c of live) {
@@ -324,12 +324,12 @@ export class Terrain {
   }
 
   private evict(): void {
-    if (this.gpuBytes <= GPU_BUDGET) return;
+    if (this.gpuBytes <= this.quality.budgetBytes) return;
     const old = [...this.tiles.values()]
       .filter((t) => t.z > 0 && t.mesh && t.lastUsed < this.frame - 2)
       .sort((a, b) => a.lastUsed - b.lastUsed);
     for (const t of old) {
-      if (this.gpuBytes <= GPU_BUDGET * 0.9) break;
+      if (this.gpuBytes <= this.quality.budgetBytes * 0.9) break;
       this.dispose(t);
     }
     // Forget tiles that were never loaded and are long out of use.
@@ -384,7 +384,18 @@ export class Terrain {
     t.maxH = hi;
     t.bounds();
 
-    const geometry = this.geometry(t, heights);
+    // Weak devices build meshes from every meshStep-th sample.
+    const n = this.regions.samples;
+    const step = this.quality.meshStep;
+    const m = (n - 1) / step + 1;
+    let grid = heights;
+    if (step > 1) {
+      grid = new Float32Array(m * m);
+      for (let r = 0; r < m; r++) {
+        for (let c = 0; c < m; c++) grid[r * m + c] = heights[r * step * n + c * step];
+      }
+    }
+    const geometry = this.geometry(t, grid, m);
     const map = new THREE.Texture(image);
     map.flipY = false;
     map.colorSpace = THREE.SRGBColorSpace;
@@ -423,7 +434,7 @@ export class Terrain {
     if (region) {
       const p = new URLSearchParams({
         SERVICE: "WMS", REQUEST: "GetMap", VERSION: "1.3.0", LAYERS: "by_dop40c", STYLES: "",
-        CRS: "EPSG:4326", BBOX: `${t.s},${t.w},${t.n},${t.e}`, WIDTH: "512", HEIGHT: "512",
+        CRS: "EPSG:4326", BBOX: `${t.s},${t.w},${t.n},${t.e}`, WIDTH: String(this.quality.imagePx), HEIGHT: String(this.quality.imagePx),
         FORMAT: "image/jpeg",
       });
       url = `${DOP40_URL}?${p}`;
@@ -438,8 +449,7 @@ export class Terrain {
     return createImageBitmap(new Blob([buf], { type: "image/jpeg" }));
   }
 
-  private geometry(t: Tile, h: Float32Array): THREE.BufferGeometry {
-    const n = this.regions.samples;
+  private geometry(t: Tile, h: Float32Array, n: number): THREE.BufferGeometry {
     const count = n * n + 4 * n;
     const pos = new Float32Array(count * 3);
     const uv = new Float32Array(count * 2);

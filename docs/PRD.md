@@ -68,6 +68,42 @@ Constraints of this approach:
 - Quest Browser runs slower than a native engine. Large splats and dense
   3D Tiles must hold 72 fps there (§10); the M0 XR spike tests this.
 
+### 4.2 Device detection and quality
+
+The app adapts to the device it runs on (`web/src/quality.ts`).
+
+**Detection at start**, before the renderer is created: GPU name (via
+`WEBGL_debug_renderer_info`), phone or Quest (user agent), and WebXR
+support for `immersive-ar` and `immersive-vr`.
+
+**XR entry.** Browsers allow an XR session only from a user tap, so no
+device starts in AR or VR by itself. Where WebXR supports it, the page
+offers a prominent "View in AR" (phones) or "Enter VR" (Quest) button. In
+the packaged apps the first tap on the start screen can open the session.
+
+**Quality profiles** set the starting point:
+
+| profile | detail threshold | mesh | aerial photo tiles | GPU budget | pixel ratio | antialias | target |
+|---|---|---|---|---|---|---|---|
+| desktop | 2.5 px | full (129²) | 512 px | 300 MB | ≤ 2 | yes | 60 fps |
+| phone | 4 px | half (65²) | 256 px | 120 MB | ≤ 1.5 | no | 30 fps |
+| Quest | 3 px | full | 256 px | 200 MB | headset | yes | 72 fps |
+| software renderer | 8 px | half | 256 px | 80 MB | 1 | no | 20 fps |
+
+A software renderer (no usable GPU, e.g. "Microsoft Basic Render Driver",
+SwiftShader, llvmpipe) is detected by its GPU name. `?quality=<profile>`
+forces a profile for testing.
+
+**Adaptive quality while running.** The frame time is averaged
+continuously. While it misses the profile's target, the detail threshold
+rises (up to 4× the profile's), then the render resolution drops (down to
+half). With headroom both recover in reverse order. Measured in the
+software renderer at Ruhpolding: 4 fps without these levers, 18 fps with
+them.
+
+Later: GPU-compressed textures (KTX2, §9.1) cut texture memory to about a
+quarter, which matters most on the Quest and phones.
+
 ## 5. Users
 
 | user | needs |
