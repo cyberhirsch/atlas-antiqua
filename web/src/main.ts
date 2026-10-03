@@ -115,7 +115,19 @@ function tick(now: number): void {
   const target = controls.target();
   const [, , up] = enu(controls.lon, controls.lat);
   camera.position.set(0, 0, 0);
-  camera.up.set(up[0], up[1], up[2]);
+  // Camera up lies in the vertical plane of the heading, at right angles to
+  // the view. Straight down this is the heading direction (north at load);
+  // using the local vertical there would leave the roll undefined.
+  const [east, north] = enu(controls.lon, controls.lat);
+  const sh = Math.sin(controls.heading);
+  const ch = Math.cos(controls.heading);
+  const sp = Math.sin(controls.pitch);
+  const cp = Math.cos(controls.pitch);
+  camera.up.set(
+    -sp * (east[0] * sh + north[0] * ch) + cp * up[0],
+    -sp * (east[1] * sh + north[1] * ch) + cp * up[1],
+    -sp * (east[2] * sh + north[2] * ch) + cp * up[2],
+  );
   const t = sub(target, cam);
   camera.lookAt(t[0], t[1], t[2]);
   // Near plane follows the height above ground so close views stay sharp.
