@@ -327,7 +327,8 @@ Proposal, to be confirmed in M0.
 | renderer | three.js | one renderer for website, Quest and Android, with solid WebXR support |
 | globe and 3D Tiles | 3DTilesRendererJS (with its globe/ellipsoid support) | WGS84 terrain and 3D Tiles in three.js |
 | splats | a three.js Gaussian splat renderer (to pick in the spike) | splats in the same scene as meshes |
-| terrain | Copernicus GLO-30 (GLO-90 where GLO-30 has no tile), tiled as a LOD pyramid | open, global, 30 m; far LODs are computed from it |
+| terrain | Copernicus GLO-30 (GLO-90 where GLO-30 has no tile), replaced by open national LiDAR (e.g. Bavarian DGM1, 1 m) at every LOD where it exists; tiled as a LOD pyramid | open, global, 30 m; LiDAR is bare ground and far better than GLO-30 even at 30 m, so it is not mixed in only at the near LODs |
+| imagery | Sentinel-2 (10 m) as the global base; open national orthophotos (10–40 cm) where they exist; Esri or Bing as an optional web layer under their terms | open base everywhere, better data where it is free, vendor layers only as an option |
 | sea floor | ETOPO 2022 (NOAA), optional layer on the website only | shows shipwrecks and submerged sites in place; not used in AR; in VR only as a far LOD |
 | 3D content | 3D Tiles 1.1 with glTF meshes and Gaussian splats | one streaming format for scans and splats |
 | XR | WebXR (`immersive-vr` on Quest, `immersive-ar` on Android) | one code base for VR, AR and the website |
@@ -340,6 +341,40 @@ CesiumJS was the first candidate for the globe. Its WebXR support is thin,
 so it stays a fallback for the website only, if three.js's globe proves
 too weak.
 
+### 9.1 Terrain and scan delivery
+
+Designed for the weakest target, the Quest browser (WebGL 2, limited GPU
+memory), so the same data runs everywhere.
+
+**Terrain: heights as images, mesh built on the GPU.**
+
+- A quadtree of height tiles (e.g. 256 × 256 samples), losslessly
+  compressed (WebP or LERC). Optionally each tile stores only its difference
+  from the upsampled parent tile: most values are near zero and compress
+  well. This keeps the useful part of wavelet compression without a decoder
+  that browsers lack.
+- The viewer draws one fixed grid mesh and displaces its vertices from the
+  height tile, with smooth blending between LODs (CDLOD / clipmap style).
+  Height images are far smaller than finished meshes.
+- Imagery as GPU-compressed textures (KTX2 / Basis Universal), so GPU memory
+  holds the compressed form. This matters more on the Quest than download
+  size.
+- LiDAR regions are blended into GLO-30 over a band of a few hundred metres
+  at their edge, at every LOD, after conversion to WGS84 and EGM2008.
+
+**Scans: Nanite's ideas, built offline, delivered as 3D Tiles.**
+
+- Unreal's Nanite splits meshes into clusters of about 128 triangles, builds
+  a crack-free LOD tree of simplified cluster groups and picks clusters per
+  frame on the GPU so each triangle covers about one pixel. That needs GPU
+  features (e.g. 64-bit atomics) that WebGL lacks and WebGPU has only in
+  part, so it is not usable on the Quest browser.
+- Instead, the cluster LOD tree is built offline (meshoptimizer), stored as
+  3D Tiles 1.1 with meshopt compression and KTX2 textures, and the viewer
+  chooses detail per tile by screen-space error.
+- Gaussian splats need their own LOD (coarse splat levels for distance);
+  the chosen splat renderer must support it.
+
 **XR spike (M0).** Before anything is built on this stack:
 
 1. One photogrammetry scan as 3D Tiles and one Gaussian splat, both at a real
@@ -349,7 +384,11 @@ too weak.
 3. On an Android phone (Chrome, then packaged as a TWA): `immersive-ar`
    session, the scan placed by GPS and compass; measured offset and heading
    drift on site.
-4. Pick the splat renderer; record results and a go / no-go for the WebXR
+4. Terrain: height tiles with GPU displacement against ready-made terrain
+   meshes as 3D Tiles; frame rate and GPU memory on the Quest. Test area:
+   Traunstein–Ruhpolding (Bavarian DGM1 blended into GLO-30).
+5. Scans: a meshoptimizer cluster LOD tree against simple per-tile LOD.
+6. Pick the splat renderer; record results and a go / no-go for the WebXR
    approach. No-go fallback: a native engine (e.g. Cesium for Unity) for the
    Quest and Android apps.
 

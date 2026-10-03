@@ -5,7 +5,8 @@
 - [ ] Confirm the stack (globe engine, data format, back end or static)
 - [ ] XR spike (PRD §9): one scan and one splat in three.js + WebXR;
       frame rate on Meta Quest, GPS/compass AR placement on Android;
-      go / no-go for WebXR packaged as Quest and Android apps
+      terrain as GPU-displaced height tiles vs 3D Tiles meshes; cluster LOD
+      for scans; go / no-go for WebXR packaged as Quest and Android apps
 - [ ] Define the site schema: 4D coordinate, time uncertainty, sources, licence
 - [ ] Check licences of the first data sources
 
