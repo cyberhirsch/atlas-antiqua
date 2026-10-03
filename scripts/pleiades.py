@@ -148,6 +148,7 @@ REMAINS_PRESENT = {"substantive", "traces", "restored", "notvisible"}
 # Copernicus DEM absolute vertical accuracy, LE90 (GLO-90 is resampled GLO-30).
 DEM_VERTICAL_M = {"glo30": 4.0, "glo90": 4.0}
 DEM_LABEL = {"glo30": "Copernicus GLO-30 (30 m)", "glo90": "Copernicus GLO-90 (90 m)"}
+THREADS = 8             # concurrent DEM tiles; each holds only small windows
 MAX_WINDOW_M = 500.0    # largest radius searched for the elevation range
 UNKNOWN_PUBLICATION_M = 10000  # published precision while the accuracy is unknown
 EARTH_RADIUS_M = 6371008.8
@@ -386,7 +387,6 @@ def sample_tile(dem_id, name, points):
         return {k: ("no-tile", None, None) for k, *_ in points}
     out = {}
     with dem:
-        band = dem.read(1, masked=True) if len(points) > 200 else None
         for key, lat, lon, radius in points:
             row, col = dem.index(lon, lat)
             row = min(max(row, 0), dem.height - 1)
@@ -395,10 +395,7 @@ def sample_tile(dem_id, name, points):
             dx = max(0, math.ceil(radius / (abs(dem.res[0]) * 111320 * max(math.cos(math.radians(lat)), 0.01))))
             r0, r1 = max(row - dy, 0), min(row + dy + 1, dem.height)
             c0, c1 = max(col - dx, 0), min(col + dx + 1, dem.width)
-            if band is not None:
-                win = band[r0:r1, c0:c1]
-            else:
-                win = dem.read(1, window=Window(c0, r0, c1 - c0, r1 - r0), masked=True)
+            win = dem.read(1, window=Window(c0, r0, c1 - c0, r1 - r0), masked=True)
             centre = win[row - r0, col - c0]
             if centre is np.ma.masked:
                 out[key] = ("no-tile", None, None)
@@ -476,7 +473,7 @@ def sample_elevations(requests, today):
                 continue
             print(f"sampling {sum(map(len, todo.values()))} points in {len(todo)} {dem_id} tiles", flush=True)
             failed = 0
-            pool = ThreadPoolExecutor(16)
+            pool = ThreadPoolExecutor(THREADS)
             try:
                 jobs = {pool.submit(sample_tile, dem_id, n, pts): n for n, pts in todo.items()}
                 for i, job in enumerate(as_completed(jobs), 1):
@@ -599,11 +596,22 @@ def public_precision(h_precision):
                                    "until a precision is known")
 
 
-def build(places, present_he):
-    ranges = period_ranges(places)
-    sites, shapes, skipped = [], [], Counter()
+def read_places():
+    """Stream places from the dump one at a time, to keep memory low."""
+    import ijson
 
-    for p in places:
+    with gzip.open(RAW, "rb") as f:
+        yield from ijson.items(f, "@graph.item", use_float=True)
+
+
+def build(places, present_he):
+    """places: a callable returning a fresh iterator over Pleiades places."""
+    ranges = period_ranges(places())
+    sites, shapes, skipped = [], [], Counter()
+    count = 0
+
+    for p in places():
+        count += 1
         types = [t for t in p.get("placeTypes") or [] if t]
         if set(types) & FALSE_TYPES:
             skipped["false or fictional"] += 1
@@ -753,7 +761,7 @@ def build(places, present_he):
                     "odbl": osm,
                 },
             })
-    return sites, shapes, skipped, ranges
+    return sites, shapes, skipped, ranges, count
 
 
 def unique_ids(periods):
@@ -907,10 +915,7 @@ def main():
     present_he = today.year + 10000
     retrieved = datetime.date.fromtimestamp(RAW.stat().st_mtime).isoformat()
 
-    with gzip.open(RAW, "rt", encoding="utf-8") as f:
-        places = json.load(f)["@graph"]
-
-    sites, shapes, skipped, ranges = build(places, present_he)
+    sites, shapes, skipped, ranges, count = build(read_places, present_he)
     add_elevation(sites, today.isoformat())
     finish(sites, retrieved)
 
@@ -929,7 +934,7 @@ def main():
 
     dated = sum(s["time"]["status"] == "dated" for s in sites)
     with_elev = sum(s["elevation"]["value_m"] is not None for s in sites)
-    print(f"{len(places)} places -> {len(sites)} sites ({dated} dated, {with_elev} with elevation), "
+    print(f"{count} places -> {len(sites)} sites ({dated} dated, {with_elev} with elevation), "
           f"{len(shapes)} shapes, {len(ranges)} period ranges known")
     print("skipped:", sum(skipped.values()))
     for reason, n in skipped.most_common(12):
