@@ -57,4 +57,4 @@ Licences and coverage still to be checked for each:
 
 ## Status
 
-Empty project. See [docs/ROADMAP.md](docs/ROADMAP.md).
+Empty project. See [docs/PRD.md](docs/PRD.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
