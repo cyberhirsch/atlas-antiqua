@@ -1,4 +1,5 @@
 ijson==3.5.1
 numpy==2.5.3
+pillow==12.3.0
 pyproj==3.8.0
 rasterio==1.5.2

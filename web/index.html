@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Atlas Antiqua</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="view"></div>
+
+    <header class="panel" id="places">
+      <h1>Atlas Antiqua</h1>
+      <p class="hint">Drag to move · right drag to turn and tilt · wheel to zoom</p>
+      <h2>High-resolution areas</h2>
+      <ul id="place-list"></ul>
+    </header>
+
+    <aside class="panel" id="info" hidden>
+      <button id="info-close" aria-label="Close">×</button>
+      <div id="info-body"></div>
+    </aside>
+
+    <section class="panel" id="time">
+      <label class="all"><input type="checkbox" id="all-dates" checked /> All dates</label>
+      <input type="range" id="year" min="0" max="12026" step="1" value="10100" />
+      <output id="year-label"></output>
+      <div id="legend"></div>
+    </section>
+
+    <footer id="credits">
+      Imagery: <a href="https://s2maps.eu">Sentinel-2 cloudless 2016</a> by EOX (CC BY 4.0, contains modified
+      Copernicus Sentinel data 2016); Bavaria: DOP40 and DGM1 ©
+      <a href="https://geodaten.bayern.de">Bayerische Vermessungsverwaltung</a> (CC BY 4.0) ·
+      Terrain: Copernicus DEM GLO-30 © DLR, Airbus (Copernicus, EU and ESA); ETOPO 2022, NOAA NCEI ·
+      Sites: <a href="https://pleiades.stoa.org">Pleiades</a> (CC BY 3.0)
+    </footer>
+
+    <div id="stats"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
