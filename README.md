@@ -15,7 +15,12 @@ A 4D coordinate for every archaeological site in the world:
 | longitude | WGS84, degrees | 31.1342 |
 | latitude | WGS84, degrees | 29.9792 |
 | elevation | metres, EGM2008 geoid | 60 |
-| time | start and end of occupation, with uncertainty | −2600 … −2500 (±50) |
+| time | start and end of occupation, with uncertainty | 7401 … 7501 HE (±50) |
+
+Years use the [Holocene calendar](https://en.wikipedia.org/wiki/Holocene_calendar)
+(HE): `HE = astronomical year + 10000`, so 1 CE = 10001 HE and
+2600 BCE = 7401 HE. There is no year zero problem, and almost all of human
+settlement history has positive years.
 
 Time is a range, not a point. Every bound carries an uncertainty, and every
 period links to a [PeriodO](https://perio.do) definition, so "Late Bronze Age"
@@ -30,7 +35,8 @@ means the same thing in Greece and in Scandinavia only when the data says so.
   own time span.
 - **3D content:** photogrammetry models and Gaussian splats placed at their
   true position and scale.
-- **XR:** WebXR for VR headsets and AR on phones, from the same web app.
+- **Three apps from one code base:** a WebXR web app, shipped as a website,
+  a VR app for Meta Quest and an AR app for Android.
 
 ## Proposed stack
 
@@ -38,9 +44,9 @@ Not decided yet. Starting point for discussion:
 
 | layer | candidate | why |
 |---|---|---|
-| globe | CesiumJS | WGS84 globe, terrain, 3D Tiles, time-dynamic data |
+| renderer | three.js + 3DTilesRendererJS | one renderer for web, VR and AR; WGS84 terrain and 3D Tiles |
 | 3D content | 3D Tiles 1.1 (glTF meshes, Gaussian splats) | streams large models; one format for scans and splats |
-| XR | WebXR | VR and AR in the browser, no app store |
+| XR | WebXR, packaged as a PWA (Meta Quest) and a Trusted Web Activity (Android) | VR and AR apps from the web code base |
 | data | GeoJSON with a time extension, PostGIS for the master set | open, diffable, queryable |
 | front end | TypeScript + Vite | |
 

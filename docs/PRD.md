@@ -41,8 +41,32 @@ Nobody can answer simple questions in one place:
 
 - Not an excavation recording system (no context sheets, finds registers).
 - Not a replacement for national registers; they remain the authority.
-- No native apps. Everything runs in the browser.
+- No platforms beyond the three in §4.1 (no iOS, no other headsets) for now.
 - No hosting of third-party 3D content without a licence that permits it.
+
+### 4.1 Platforms
+
+One WebXR web app, shipped three ways, on one shared data set:
+
+| platform | packaging | role |
+|---|---|---|
+| Website | browser, desktop and mobile | globe and map, search, time slider, data and coverage views |
+| Meta Quest | the web app as a PWA in the Meta Horizon Store; WebXR `immersive-vr` | stand inside a site at 1:1 scale, time travel through its phases |
+| Android | the web app as a Trusted Web Activity in the Play Store; WebXR `immersive-ar` via ARCore | see sites and assets around you, on site |
+
+All three run the same code and read the same site data and 3D Tiles, so a
+site, its shapes and its scans look and date the same everywhere.
+
+Constraints of this approach:
+
+- The Android wrapper must be a Trusted Web Activity, which runs in Chrome.
+  Android WebView (Capacitor, Cordova) has no WebXR.
+- WebXR cannot use ARCore's Geospatial API. On-site AR is placed by GPS and
+  compass, so expect metres of offset and heading drift. Exact overlay of a
+  scan on real ruins may later need a native Android module or manual
+  alignment.
+- Quest Browser runs slower than a native engine. Large splats and dense
+  3D Tiles must hold 72 fps there (§10); the M0 XR spike tests this.
 
 ## 5. Users
 
@@ -67,14 +91,15 @@ identity and may have many phases, features and assets.
 |---|---|
 | longitude, latitude | WGS84 decimal degrees, with a horizontal precision in metres |
 | elevation | metres above the EGM2008 geoid, with a vertical precision; may be unknown |
-| time | `start` and `end` of an interval, each with its own uncertainty |
+| time | `start` and `end` year of an interval |
 
 Time rules:
 
 - Years are stored in the Holocene calendar: `HE = astronomical year + 10000`,
   so 1 CE = 10001 HE and 2600 BCE = 7401 HE. The UI can also show BCE/CE.
-- Each bound is `{earliest, latest}`, so "founded 7th century BCE" is
-  `start = {9301, 9400}`.
+- Each bound is a single year, read by the viewer's time slider. "Founded
+  7th century BCE" is `start = 9301`, the beginning of that century. How sure
+  the dates are is carried by the time confidence (§6.7), not by ranges.
 - An interval may reference a **PeriodO** period instead of, or in addition
   to, numeric dates. Numeric bounds are derived from the period when absent.
 - Radiocarbon dates are stored as calibrated ranges, with the raw date and
@@ -218,11 +243,12 @@ Priorities: **P0** first release, **P1** soon after, **P2** later.
 
 | id | requirement | prio |
 |---|---|---|
-| X1 | VR mode via WebXR: stand inside a site at 1:1 scale | P1 |
+| X1 | Meta Quest app (WebXR PWA): stand inside a site at 1:1 scale | P1 |
 | X2 | VR "table" mode: site as a miniature in front of the user | P2 |
-| X3 | AR on phones via WebXR: show sites and assets around the user's location | P1 |
-| X4 | AR placement fallback on devices without WebXR (tabletop model via the browser's AR viewer) | P2 |
+| X3 | Android app (WebXR TWA): show sites and assets around the user's location in AR, placed by GPS and compass | P1 |
+| X4 | AR tabletop mode: place a site as a model on a table, away from the site | P2 |
 | X5 | Comfort: teleport locomotion, snap turning, no forced camera motion | P1 |
+| X6 | Manual AR alignment: nudge and rotate an on-site overlay to match the ruins | P2 |
 
 ### 7.7 Data pipeline
 
@@ -298,16 +324,32 @@ Proposal, to be confirmed in M0.
 
 | layer | choice | reason |
 |---|---|---|
-| globe | CesiumJS | WGS84 globe, terrain, time-dynamic data, 3D Tiles |
+| renderer | three.js | one renderer for website, Quest and Android, with solid WebXR support |
+| globe and 3D Tiles | 3DTilesRendererJS (with its globe/ellipsoid support) | WGS84 terrain and 3D Tiles in three.js |
+| splats | a three.js Gaussian splat renderer (to pick in the spike) | splats in the same scene as meshes |
 | 3D content | 3D Tiles 1.1 with glTF meshes and Gaussian splats | one streaming format for scans and splats |
-| XR | WebXR | VR and AR in one web app |
+| XR | WebXR (`immersive-vr` on Quest, `immersive-ar` on Android) | one code base for VR, AR and the website |
+| packaging | PWA for the Meta Horizon Store; Trusted Web Activity (Bubblewrap) for Google Play | store apps without a native engine |
 | front end | TypeScript, Vite | |
 | data store | PostgreSQL + PostGIS | spatial and temporal queries |
 | delivery | vector tiles or 3D Tiles for sites; static hosting for the open subset | scales without a heavy server |
 
-Open check: whether CesiumJS's WebXR support and splat rendering are mature
-enough, or whether XR needs a separate renderer (e.g. three.js) fed from the
-same data.
+CesiumJS was the first candidate for the globe. Its WebXR support is thin,
+so it stays a fallback for the website only, if three.js's globe proves
+too weak.
+
+**XR spike (M0).** Before anything is built on this stack:
+
+1. One photogrammetry scan as 3D Tiles and one Gaussian splat, both at a real
+   site's position, in a three.js scene with 3DTilesRendererJS.
+2. On a Meta Quest (Quest Browser, then packaged as a PWA): frame rate in
+   `immersive-vr` at 1:1 scale; splat size at which it drops below 72 fps.
+3. On an Android phone (Chrome, then packaged as a TWA): `immersive-ar`
+   session, the scan placed by GPS and compass; measured offset and heading
+   drift on site.
+4. Pick the splat renderer; record results and a go / no-go for the WebXR
+   approach. No-go fallback: a native engine (e.g. Cesium for Unity) for the
+   Quest and Android apps.
 
 ## 10. Performance targets
 
@@ -339,14 +381,15 @@ Targets, not measurements.
 | Licence conflicts between sources | licence per field; decide target licence early |
 | Inconsistent dating across sources | PeriodO links; keep raw values; show uncertainty |
 | Large 3D assets and hosting cost | 3D Tiles streaming; external hosting links where possible |
-| XR fragmentation across devices | WebXR first; graceful fallback to screen view |
+| Three apps drifting apart | one WebXR code base, one data set and one 3D Tiles stream for all |
+| WebXR too slow on Quest, or AR placement too coarse | XR spike in M0 before building on it; native engine as fallback |
 | Scope: "every site in the world" | ship per region; coverage report makes progress visible |
 
 ## 13. Milestones
 
 See [ROADMAP.md](ROADMAP.md). In short:
 
-- **M0** decisions: stack, schema, target licence
+- **M0** decisions: stack, schema, target licence; XR spike
 - **M1** globe with points and time slider (one source)
 - **M2** splines and polygons
 - **M3** photogrammetry and splats

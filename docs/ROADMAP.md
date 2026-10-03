@@ -3,6 +3,9 @@
 ## M0: Decisions
 
 - [ ] Confirm the stack (globe engine, data format, back end or static)
+- [ ] XR spike (PRD §9): one scan and one splat in three.js + WebXR;
+      frame rate on Meta Quest, GPS/compass AR placement on Android;
+      go / no-go for WebXR packaged as Quest and Android apps
 - [ ] Define the site schema: 4D coordinate, time uncertainty, sources, licence
 - [ ] Check licences of the first data sources
 
@@ -25,8 +28,8 @@
 
 ## M4: XR
 
-- [ ] VR walk-through via WebXR
-- [ ] AR on phones: show a site where you stand
+- [ ] Meta Quest app: WebXR VR walk-through at 1:1 scale, packaged as a PWA
+- [ ] Android app: WebXR AR, show a site where you stand, packaged as a TWA
 
 ## M5: Coverage
 
