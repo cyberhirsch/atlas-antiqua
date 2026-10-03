@@ -330,7 +330,7 @@ Proposal, to be confirmed in M0.
 | terrain | Copernicus GLO-30 (GLO-90 where GLO-30 has no tile), replaced by open national LiDAR (e.g. Bavarian DGM1, 1 m) at every LOD where it exists; tiled as a LOD pyramid | open, global, 30 m; LiDAR is bare ground and far better than GLO-30 even at 30 m, so it is not mixed in only at the near LODs |
 | imagery | Sentinel-2 (10 m) as the global base; open national orthophotos (10–40 cm) where they exist; Esri or Bing as an optional web layer under their terms | open base everywhere, better data where it is free, vendor layers only as an option |
 | sea floor | ETOPO 2022 (NOAA), optional layer on the website only | shows shipwrecks and submerged sites in place; not used in AR; in VR only as a far LOD |
-| 3D content | 3D Tiles 1.1 with glTF meshes and Gaussian splats | one streaming format for scans and splats |
+| 3D content | 3D Tiles 1.1 with glTF meshes and Gaussian splats for delivery; GLB for single scans; OpenUSD for collaborative site scenes (§9.2) | one streaming format for scans and splats; source formats that tools and people can edit |
 | XR | WebXR (`immersive-vr` on Quest, `immersive-ar` on Android) | one code base for VR, AR and the website |
 | packaging | PWA for the Meta Horizon Store; Trusted Web Activity (Bubblewrap) for Google Play | store apps without a native engine |
 | front end | TypeScript, Vite | |
@@ -374,6 +374,31 @@ memory), so the same data runs everywhere.
   chooses detail per tile by screen-space error.
 - Gaussian splats need their own LOD (coarse splat levels for distance);
   the chosen splat renderer must support it.
+
+### 9.2 3D formats: authoring, exchange, delivery
+
+| stage | format | why |
+|---|---|---|
+| collaborate on a site scene | OpenUSD | layers per source or contributor, stronger layers override weaker ones without overwriting, so provenance stays visible (§6.6); variants for phases (§6.3); payloads load heavy scans only when needed; read and written by Blender, Houdini, Maya, Unreal, Unity and Omniverse |
+| upload and exchange a single scan or object | GLB (binary glTF 2.0) | one compact file; meshopt or Draco geometry, KTX2 textures; splats via the draft `KHR_gaussian_splatting` extension |
+| deliver to website, Quest and Android | 3D Tiles 1.1 (tiles are GLB) | streaming and LOD by screen-space error (§9.1) |
+
+Rules:
+
+- 3D Tiles are build output, like compiled code. Nobody edits a tile: its
+  neighbours, parents and children would no longer match, and the next build
+  would overwrite it. Users check out the source (the GLB, or the site's USD
+  layer), change it, submit it for review, and the build rebuilds only that
+  site's tiles.
+- USD and GLB carry local metres only. The position on Earth (WGS84,
+  EGM2008, orientation, scale) lives in the site record and in the 3D Tiles
+  root transform, not in the files.
+- USD is for 3D scenes, not for site records: the 29,000+ sites stay in
+  PostGIS / GeoJSON.
+- USD is needed from M3 (scans) on, and only where several people work on
+  one site scene. Before that, GLB files and git are enough.
+- Single tiles can still be inspected: each is a GLB, and `3d-tiles-tools`
+  unpacks whole tilesets for debugging.
 
 **XR spike (M0).** Before anything is built on this stack:
 
