@@ -152,7 +152,7 @@ function tick(now: number): void {
       controls.range *= 1.15;
     }
     const s = terrain.stats;
-    stats.textContent = `tiles ${s.rendered} drawn · ${s.cached} cached · ${s.loading} loading · level ${s.maxLevel} · ${controls.lat.toFixed(4)}, ${controls.lon.toFixed(4)} · ${Math.round(controls.range)} m`;
+    stats.textContent = `tiles ${s.rendered} drawn · level ${s.maxLevel} · ${s.loading} loading · ${s.gpuMB} MB · ${s.downloads} downloaded · ${s.hits} from cache · ${s.wasted} unused · ${s.aborted} aborted · ${controls.lat.toFixed(4)}, ${controls.lon.toFixed(4)} · ${Math.round(controls.range)} m`;
   }
   requestAnimationFrame(tick);
 }

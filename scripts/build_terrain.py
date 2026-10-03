@@ -22,6 +22,7 @@ Usage: python scripts/build_terrain.py [--max-global 5]
 """
 
 import argparse
+import datetime
 import json
 import math
 import re
@@ -326,6 +327,7 @@ def main():
         "samples": N,
         "encoding": "terrain-rgb: h = (R*65536 + G*256 + B) / 10 - 10000, metres above the WGS84 ellipsoid",
         "maxGlobal": args.max_global,
+        "built": datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S"),
         "regions": [{"name": f"GLO-30 {lat:+03d} {lon:+04d}", "bbox": [lon, lat, lon + 1, lat + 1],
                      "maxLevel": GLO30_MAX} for lat, lon in glo.cells()]
                    + [{"name": "DGM1 Traunstein-Ruhpolding", "bbox": list(dgm.bbox),
