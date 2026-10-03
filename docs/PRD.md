@@ -71,10 +71,10 @@ identity and may have many phases, features and assets.
 
 Time rules:
 
-- Years are stored as astronomical years (1 BCE = 0, 2 BCE = −1) and shown as
-  BCE/CE.
+- Years are stored in the Holocene calendar: `HE = astronomical year + 10000`,
+  so 1 CE = 10001 HE and 2600 BCE = 7401 HE. The UI can also show BCE/CE.
 - Each bound is `{earliest, latest}`, so "founded 7th century BCE" is
-  `start = {−699, −600}`.
+  `start = {9301, 9400}`.
 - An interval may reference a **PeriodO** period instead of, or in addition
   to, numeric dates. Numeric bounds are derived from the period when absent.
 - Radiocarbon dates are stored as calibrated ranges, with the raw date and
@@ -114,6 +114,51 @@ a creator, a licence and a precision.
 Every field records its source, the source's identifier and licence, and the
 date of import. Merged sites keep all source records; conflicts are kept, not
 silently overwritten.
+
+### 6.7 Confidence
+
+Every site, geometry and asset carries a confidence rating per axis, because
+a precise position with a guessed date is a different thing from a vague
+position with a radiocarbon date.
+
+| axis | question it answers |
+|---|---|
+| `identity` | Is this really an archaeological site, and is its identification (e.g. ancient name ↔ place) right? |
+| `position` | How sure is the horizontal location? |
+| `elevation` | How sure is the height, and does it describe the ancient surface or today's? |
+| `time` | How sure are the dates? |
+
+Each axis gets a level from 0 to 5:
+
+| level | label | position | time | identity |
+|---|---|---|---|---|
+| 5 | verified | surveyed or GNSS, ≤ 10 m | scientific dating (¹⁴C, dendro, TL) | excavated, published |
+| 4 | high | authoritative register, ≤ 100 m | dated from excavated material | authoritative register |
+| 3 | medium | gazetteer point, ≤ 1 km | period attribution from finds or style | scholarly consensus |
+| 2 | low | approximate, ≤ 10 km | inferred from context or neighbours | probable, some dispute |
+| 1 | speculative | from ancient texts or itineraries only | traditional or legendary date | disputed or conjectural |
+| 0 | unknown | | | |
+
+Rules:
+
+- Levels are derived at import from the source's own precision and certainty
+  fields (e.g. Pleiades `locationPrecision`, attestation certainty), the
+  source tier, and the dating method. The rule that set each level is stored.
+- Independent sources that agree within their precision raise the level by
+  one, capped at 4; only direct evidence reaches 5.
+- Manual overrides are allowed, with a reason and an author.
+- The overall confidence shown on the map is the lowest axis (weakest link).
+- **Elevation from a DEM** describes today's surface. On tells, buried or
+  submerged sites, the ancient level can lie metres away. DEM-derived
+  elevation is therefore capped at 3 and flagged `surface: modern` until a
+  source gives the ancient level.
+
+### 6.8 Confidence in the UI
+
+- Marker style encodes overall confidence (e.g. solid → hollow → dashed).
+- A minimum-confidence filter per axis.
+- Site panel shows each axis with its level, the rule behind it and the
+  sources.
 
 ## 7. Requirements
 
@@ -189,6 +234,8 @@ Priorities: **P0** first release, **P1** soon after, **P2** later.
 | D4 | Scheduled re-import; changes shown as diffs | P2 |
 | D5 | Coverage report per country and per period | P1 |
 | D6 | Public export of the open subset with attribution | P1 |
+| D7 | Confidence levels per axis derived at import, with the rule stored (§6.7) | P0 |
+| D8 | Confidence filter and marker styling in the UI (§6.8) | P1 |
 
 ### 7.8 Sensitive sites
 
@@ -214,6 +261,33 @@ Order is a proposal.
 | PeriodO | global | period definitions for the time axis |
 | ARIADNE | Europe | research metadata, links to national data |
 | National registers | per country | authoritative; licences vary widely |
+
+### 8.1 Further sources
+
+Candidates that add value with little integration work, because they are
+open downloads keyed by coordinates, Wikidata IDs or Pleiades IDs. Licences
+and current availability still need checking for each.
+
+| kind | source | adds |
+|---|---|---|
+| **identity and links** | Wikidata | names in many languages, images (Wikimedia Commons), Wikipedia articles, heritage designations, inception dates |
+| | UNESCO World Heritage List | status, criteria, inscription year, official boundaries for many sites |
+| | Pelagios / Linked Places format | links between places, texts and maps |
+| **time** | PeriodO | regional period definitions with date ranges |
+| | Radiocarbon databases (e.g. p3k14c, XRONOS, RADON) | dated samples with coordinates: direct level-5 time evidence |
+| | Allen Ancient DNA Resource (AADR) | dated, located human remains with genetic ancestry |
+| **geometry** | OpenStreetMap | site outlines as polygons, walls and ditches as lines |
+| | Itiner-e, DARE | Roman road network as splines; Roman sites |
+| | ORBIS | travel times and costs between Roman places |
+| **elevation and landscape** | Copernicus GLO-30 DEM | global elevation (already used by `scripts/pleiades.py`) |
+| | National open LiDAR (e.g. Bavaria, England, Netherlands) | 1 m terrain where earthworks become visible |
+| | Sea-level and palaeo-coastline reconstructions | which coastal sites were inland, which are now submerged |
+| **3D and media** | Sketchfab (CC-licensed cultural heritage models), Smithsonian Open Access 3D, CyArk, Zamani Project | photogrammetry and scans to place on the map |
+| | Wikimedia Commons, Europeana | photographs and plans, often geotagged |
+| **context** | Epigraphic databases (e.g. EDH, Trismegistos Places) | inscriptions found at a place |
+| | Nomisma / coin find databases | coin finds with dates, linked to mints |
+| | Shipwreck databases | dated underwater sites |
+| | Georeferenced historical maps (e.g. David Rumsey) | old surveys showing features since destroyed |
 
 Licence compatibility is a release blocker: an ODbL source may force the
 merged database under ODbL. Decide the target licence in M0.
