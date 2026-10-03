@@ -65,11 +65,12 @@ export class GlobeControls {
     const k = Math.min(mpp, 2e5) / WGS84_A * (180 / Math.PI);
     const ch = Math.cos(this.heading);
     const sh = Math.sin(this.heading);
-    // screen right = heading + 90°, screen up = heading
-    const east = -dx * ch - dy * sh;
-    const north = dx * sh - dy * ch;
-    this.lat = Math.max(-89, Math.min(89, this.lat - north * k));
-    this.lon += (-east * k) / Math.max(Math.cos((this.lat * Math.PI) / 180), 0.05);
+    // The ground follows the pointer, so the target moves against the drag.
+    // Screen right is (east, north) = (cos h, -sin h), screen up is (sin h, cos h).
+    const east = -dx * ch + dy * sh;
+    const north = dx * sh + dy * ch;
+    this.lat = Math.max(-89, Math.min(89, this.lat + north * k));
+    this.lon += (east * k) / Math.max(Math.cos((this.lat * Math.PI) / 180), 0.05);
     this.lon = ((this.lon + 540) % 360) - 180;
   }
 
