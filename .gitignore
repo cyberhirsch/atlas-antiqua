@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.env
+.env.*
+*.log
+.DS_Store
+Thumbs.db
+
+# large 3D assets stay out of git
+*.ply
+*.splat
+*.spz
+*.las
+*.laz
+*.e57
+data/raw/
