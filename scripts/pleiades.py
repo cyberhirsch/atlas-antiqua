@@ -131,6 +131,14 @@ CATEGORIES = [
         "cave", "hunting-base", "earthwork", "earthworks"}),
 ]
 
+# Camera distance (km) within which a site of each category is shown,
+# unless links from other places make it more important (view_distance).
+VIEW_KM = {
+    "settlement": 100, "fortification": 50, "religious": 30, "building": 30,
+    "infrastructure": 30, "production": 30, "rural": 20, "site": 20,
+    "other": 20, "funerary": 10,
+}
+
 MODERN_LOCATION_TYPES = {"associated_modern", "associated modern", "relocated_modern"}
 
 # Pleiades attestation confidence -> PRD time level (§6.7).
@@ -166,19 +174,39 @@ def to_he(year):
     return year + 10001 if year < 0 else year + 10000
 
 
-def period_ranges(places):
-    """Year range of each Pleiades period, read from records with one period.
+def first_pass(places):
+    """Period year ranges and inbound link counts, from one pass over places.
 
     Pleiades sets a record's start/end from its periods, so a record with a
-    single attestation carries that period's range.
+    single attestation carries that period's range. Inbound links count how
+    many places connect to a place (a temple "at" Rome, a road to Rome); they
+    measure its importance.
     """
-    ranges = {}
+    ranges, inbound = {}, Counter()
     for p in places:
         for rec in p.get("locations", []) + p.get("names", []):
             at = rec.get("attestations") or []
             if len(at) == 1 and rec.get("start") is not None and rec.get("end") is not None:
                 ranges.setdefault(at[0]["timePeriod"], (rec["start"], rec["end"]))
-    return ranges
+        for c in p.get("connections") or []:
+            target = (c.get("connectsTo") or "").rstrip("/").split("/")[-1]
+            if target and target != p["id"]:
+                inbound[target] += 1
+    return ranges, inbound
+
+
+def view_distance(types, category, inbound):
+    """Largest camera distance (km) at which the site is shown; None = always.
+
+    Major places show from orbit, minor ones only close up, so the map is not
+    flooded with points from a distance.
+    """
+    if inbound >= 8 or {"urban", "polis"} & set(types):
+        return None, f"major place: {inbound} places link to it" if inbound >= 8 else "city (urban or polis)"
+    if inbound >= 3:
+        return 1000, f"{inbound} places link to it"
+    km = VIEW_KM.get(category, 20)
+    return km, f"{category}: shown within {km} km"
 
 
 def time_bounds(records, ranges, present_he):
@@ -606,7 +634,7 @@ def read_places():
 
 def build(places, present_he):
     """places: a callable returning a fresh iterator over Pleiades places."""
-    ranges = period_ranges(places())
+    ranges, inbound = first_pass(places())
     sites, shapes, skipped = [], [], Counter()
     count = 0
 
@@ -704,6 +732,8 @@ def build(places, present_he):
                 "position": {"level": pos_level, "rule": pos_rule},
                 "time": {"level": time_level, "rule": time_rule},
             },
+            "view": dict(zip(("km", "rule"), view_distance(types, category_of(types), inbound[pid])),
+                         inbound_links=inbound[pid]),
             "remains": sorted({l.get("archaeologicalRemains") for l in ancient
                                if l.get("archaeologicalRemains")}),
             "shape_count": len(located),
@@ -876,7 +906,7 @@ def write(sites, shapes, meta):
         "start", "end", "ongoing", "time_status",
         "conf_identity", "conf_position", "conf_elevation", "conf_time", "conf_overall",
         "rule_identity", "rule_position", "rule_elevation", "rule_time",
-        "area_m2", "length_m", "extent_m", "place_types", "periods",
+        "area_m2", "length_m", "extent_m", "view_km", "inbound_links", "place_types", "periods",
         "licence", "odbl", "record",
     ]
     with open(OUT / "pleiades-sites.csv", "w", encoding="utf-8", newline="") as f:
@@ -894,6 +924,7 @@ def write(sites, shapes, meta):
                 c["time"]["level"], c["overall"],
                 c["identity"]["rule"], c["position"]["rule"], c["elevation"]["rule"], c["time"]["rule"],
                 s["size"]["area_m2"], s["size"]["length_m"], s["size"]["extent_m"],
+                s["view"]["km"], s["view"]["inbound_links"],
                 "|".join(s["place_types"]), "|".join(unique_ids(t["periods"])),
                 "|".join(s["licence"]), s["odbl"], s["sources"][0]["record"],
             ])

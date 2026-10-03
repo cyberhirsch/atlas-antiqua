@@ -90,6 +90,7 @@ function showSite(s: Site): void {
       <dt>Elevation</dt><dd>${s.h ? `${s.h.toFixed(0)} m (ellipsoid)` : "unknown"}</dd>
       <dt>Confidence</dt><dd>${s.confidence} of 5</dd>
       <dt>Precision</dt><dd>${s.precision ? `${s.precision} m` : "unknown"}</dd>
+      <dt>Shown from</dt><dd>${s.viewKm === null ? "any distance" : `${s.viewKm} km`}</dd>
     </dl>
     <a href="https://pleiades.stoa.org/places/${s.id}" target="_blank" rel="noopener">Pleiades record ↗</a>`;
   infoBody.querySelector("h3")!.textContent = s.name;

@@ -2,7 +2,7 @@
 // in 10° cells, each with its own origin, so float32 positions stay precise.
 
 import * as THREE from "three";
-import { Vec3, dot, ecef, sub } from "./geo";
+import { Vec3, dot, ecef, length, sub } from "./geo";
 
 export interface Site {
   id: string;
@@ -15,6 +15,7 @@ export interface Site {
   category: string;
   confidence: number;
   precision: number | null;
+  viewKm: number | null; // null: shown from any distance
   pos: Vec3;
 }
 
@@ -32,6 +33,7 @@ export const CATEGORY_COLORS: Record<string, string> = {
 };
 
 const UNDATED = -1e9;
+const ALWAYS = 1e12; // metres
 
 interface Chunk {
   origin: Vec3;
@@ -62,6 +64,7 @@ export class Sites {
         attribute float aEnd;
         attribute vec3 aColor;
         attribute float aShow;
+        attribute float aView;
         uniform float uYear;
         uniform float uAll;
         uniform float uSize;
@@ -74,7 +77,8 @@ export class Sites {
           gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
           vec3 rel = (modelMatrix * vec4(position, 1.0)).xyz;
           bool front = dot(rel, normalize(rel + uCam)) < 0.0;
-          gl_PointSize = (inTime && front && aShow > 0.5) ? uSize : 0.0;
+          bool near = length(rel) <= aView;
+          gl_PointSize = (inTime && front && near && aShow > 0.5) ? uSize : 0.0;
           if (gl_PointSize == 0.0) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
         }`,
       fragmentShader: /* glsl */ `
@@ -96,12 +100,13 @@ export class Sites {
     const data = await (await fetch(url)).json();
     this.categories = data.categories;
     this.sites = data.rows.map((r: (string | number | null)[]) => {
-      const [id, name, lon, lat, h, start, end, cat, conf, precision] = r as [
+      const [id, name, lon, lat, h, start, end, cat, conf, precision, viewKm] = r as [
         string, string, number, number, number | null, number | null, number | null, number, number, number | null,
+        number | null,
       ];
       return {
         id, name, lon, lat, h: h ?? 0, start, end,
-        category: data.categories[cat], confidence: conf, precision,
+        category: data.categories[cat], confidence: conf, precision, viewKm,
         pos: ecef(lon, lat, (h ?? 0) + 2),
       };
     });
@@ -118,12 +123,14 @@ export class Sites {
       const end = new Float32Array(sites.length);
       const color = new Float32Array(sites.length * 3);
       const show = new Float32Array(sites.length).fill(1);
+      const view = new Float32Array(sites.length);
       const c = new THREE.Color();
       sites.forEach((s, i) => {
         const d = sub(s.pos, origin);
         pos.set(d, 3 * i);
         start[i] = s.start ?? UNDATED;
         end[i] = s.end ?? UNDATED;
+        view[i] = s.viewKm === null ? ALWAYS : s.viewKm * 1000;
         c.set(CATEGORY_COLORS[s.category] ?? "#ffffff");
         color.set([c.r, c.g, c.b], 3 * i);
       });
@@ -133,6 +140,7 @@ export class Sites {
       g.setAttribute("aEnd", new THREE.BufferAttribute(end, 1));
       g.setAttribute("aColor", new THREE.BufferAttribute(color, 3));
       g.setAttribute("aShow", new THREE.BufferAttribute(show, 1));
+      g.setAttribute("aView", new THREE.BufferAttribute(view, 1));
       const points = new THREE.Points(g, this.material);
       points.frustumCulled = false;
       points.renderOrder = 10;
@@ -179,6 +187,7 @@ export class Sites {
       if (!this.visible(s)) continue;
       const rel = sub(s.pos, cam);
       if (dot(rel, s.pos) > 0) continue; // far side of the globe
+      if (s.viewKm !== null && length(rel) > s.viewKm * 1000) continue; // too far for its importance
       v.set(rel[0], rel[1], rel[2]).project(camera);
       if (v.z > 1) continue;
       const sx = ((v.x + 1) / 2) * w;
