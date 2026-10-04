@@ -1,0 +1,150 @@
+{
+ "scheme": "WGS84 quadtree, level z has 2^(z+1) x 2^z tiles; x from 180W, y from 90N",
+ "samples": 129,
+ "encoding": "gzip, int32 LE decimetre deltas row-major from the NW corner; metres above the WGS84 ellipsoid",
+ "maxGlobal": 5,
+ "built": "20261004T113337",
+ "regions": [
+  {
+   "name": "GLO-30 +29 +031",
+   "bbox": [
+    31,
+    29,
+    32,
+    30
+   ],
+   "maxLevel": 12
+  },
+  {
+   "name": "GLO-30 +34 +023",
+   "bbox": [
+    23,
+    34,
+    24,
+    35
+   ],
+   "maxLevel": 12
+  },
+  {
+   "name": "GLO-30 +34 +024",
+   "bbox": [
+    24,
+    34,
+    25,
+    35
+   ],
+   "maxLevel": 12
+  },
+  {
+   "name": "GLO-30 +34 +025",
+   "bbox": [
+    25,
+    34,
+    26,
+    35
+   ],
+   "maxLevel": 12
+  },
+  {
+   "name": "GLO-30 +34 +026",
+   "bbox": [
+    26,
+    34,
+    27,
+    35
+   ],
+   "maxLevel": 12
+  },
+  {
+   "name": "GLO-30 +35 +023",
+   "bbox": [
+    23,
+    35,
+    24,
+    36
+   ],
+   "maxLevel": 12
+  },
+  {
+   "name": "GLO-30 +35 +024",
+   "bbox": [
+    24,
+    35,
+    25,
+    36
+   ],
+   "maxLevel": 12
+  },
+  {
+   "name": "GLO-30 +35 +025",
+   "bbox": [
+    25,
+    35,
+    26,
+    36
+   ],
+   "maxLevel": 12
+  },
+  {
+   "name": "GLO-30 +35 +026",
+   "bbox": [
+    26,
+    35,
+    27,
+    36
+   ],
+   "maxLevel": 12
+  },
+  {
+   "name": "GLO-30 +37 +023",
+   "bbox": [
+    23,
+    37,
+    24,
+    38
+   ],
+   "maxLevel": 12
+  },
+  {
+   "name": "GLO-30 +41 +012",
+   "bbox": [
+    12,
+    41,
+    13,
+    42
+   ],
+   "maxLevel": 12
+  },
+  {
+   "name": "GLO-30 +41 +023",
+   "bbox": [
+    23,
+    41,
+    24,
+    42
+   ],
+   "maxLevel": 12
+  },
+  {
+   "name": "GLO-30 +47 +012",
+   "bbox": [
+    12,
+    47,
+    13,
+    48
+   ],
+   "maxLevel": 12
+  },
+  {
+   "name": "DGM1 Traunstein-Ruhpolding",
+   "bbox": [
+    12.587949942951973,
+    47.73085987514508,
+    12.706567263004494,
+    47.9048580687825
+   ],
+   "maxLevel": 16,
+   "imagery": "bayern-dop40"
+  }
+ ]
+}
