@@ -1,11 +1,12 @@
 // Globe camera: orbits a target point on the ground. Left drag pans,
 // right drag (or shift + left drag) turns and tilts, the wheel zooms
-// towards the target. Keys: W/S forward and back, A/D sideways, Q/E turn,
+// towards the target, middle drag looks around from where the camera
+// stands. Keys: W/S forward and back, A/D sideways, Q/E turn,
 // R/F zoom in and out; speed scales with the distance to the ground.
 // State is kept in double precision.
 
 import * as THREE from "three";
-import { Vec3, add, ecef, enu, scale, WGS84_A } from "./geo";
+import { Vec3, add, ecef, enu, geodetic, scale, WGS84_A } from "./geo";
 
 export interface View {
   lon: number;
@@ -23,7 +24,7 @@ export class GlobeControls {
   heading = 0;
   pitch = -Math.PI / 2;
   private flight?: { from: View; to: View; t0: number; ms: number };
-  private drag?: { x: number; y: number; rotate: boolean; moved: number };
+  private drag?: { x: number; y: number; mode: "pan" | "orbit" | "look"; moved: number };
   onClick?: (x: number, y: number) => void;
   private keys = new Set<string>();
   private lastFrame = 0;
@@ -31,7 +32,9 @@ export class GlobeControls {
   constructor(private el: HTMLElement, private camera: THREE.PerspectiveCamera) {
     el.addEventListener("pointerdown", (e) => {
       el.setPointerCapture(e.pointerId);
-      this.drag = { x: e.clientX, y: e.clientY, rotate: e.button === 2 || e.shiftKey, moved: 0 };
+      if (e.button === 1) e.preventDefault(); // no autoscroll
+      const mode = e.button === 1 ? "look" : e.button === 2 || e.shiftKey ? "orbit" : "pan";
+      this.drag = { x: e.clientX, y: e.clientY, mode, moved: 0 };
       this.flight = undefined;
     });
     el.addEventListener("pointermove", (e) => {
@@ -41,9 +44,11 @@ export class GlobeControls {
       this.drag.x = e.clientX;
       this.drag.y = e.clientY;
       this.drag.moved += Math.abs(dx) + Math.abs(dy);
-      if (this.drag.rotate) {
+      if (this.drag.mode === "orbit") {
         this.heading -= dx * 0.005;
         this.pitch = Math.min(-0.05, Math.max(-Math.PI / 2, this.pitch - dy * 0.005));
+      } else if (this.drag.mode === "look") {
+        this.look(dx, dy);
       } else {
         this.pan(dx, dy);
       }
@@ -75,8 +80,32 @@ export class GlobeControls {
     );
   }
 
+  /**
+   * Turn the view while the camera stays put: change heading and pitch,
+   * then move the target to where the new view ray meets the ground
+   * (assumed level at the current target height).
+   */
+  private look(dx: number, dy: number): void {
+    const cam = this.position();
+    const camHeight = geodetic(cam)[2];
+    const fov = (this.camera.fov * Math.PI) / 180;
+    const perPx = fov / Math.max(this.el.clientHeight, 1);
+    // Mouse-look: right turns right, up looks up.
+    this.heading += dx * perPx;
+    this.pitch = Math.min(-0.03, Math.max(-Math.PI / 2, this.pitch - dy * perPx));
+    const above = Math.max(camHeight - this.h, 1);
+    this.range = Math.min(Math.max(above / Math.sin(-this.pitch), 30), 2e6);
+    const [e, n, u] = enu(this.lon, this.lat);
+    const cp = Math.cos(this.pitch);
+    const look: Vec3 = add(add(scale(e, cp * Math.sin(this.heading)), scale(n, cp * Math.cos(this.heading))), scale(u, Math.sin(this.pitch)));
+    const target = add(cam, scale(look, this.range));
+    const [lon, lat] = geodetic(target);
+    this.lon = lon;
+    this.lat = lat;
+  }
+
   private pan(dx: number, dy: number): void {
-    const mpp = (2 * this.range * Math.tan((this.camera.fov * Math.PI) / 360)) / this.el.clientHeight;
+    const mpp = (2 * this.range * Math.tan((this.camera.fov * Math.PI) / 360)) / Math.max(this.el.clientHeight, 1);
     const k = Math.min(mpp, 2e5) / WGS84_A * (180 / Math.PI);
     const ch = Math.cos(this.heading);
     const sh = Math.sin(this.heading);
@@ -149,6 +178,11 @@ export class GlobeControls {
       this.pitch = f.from.pitch + (f.to.pitch - f.from.pitch) * s;
       if (t >= 1) this.flight = undefined;
     }
+    return this.position();
+  }
+
+  /** Camera position in ECEF for the current state. */
+  position(): Vec3 {
     const [e, n, u] = enu(this.lon, this.lat);
     const cp = Math.cos(this.pitch);
     const look: Vec3 = add(add(scale(e, cp * Math.sin(this.heading)), scale(n, cp * Math.cos(this.heading))), scale(u, Math.sin(this.pitch)));
