@@ -39,6 +39,22 @@ def optimise_glb(src: Path, dst: Path) -> None:
     subprocess.run(["node", "scripts/ktx2.mjs", str(dst.resolve()), str(dst.resolve())], check=True, cwd=ROOT / "web")
 
 
+# Simpler versions of a mesh for distance (ratio of triangles, distance in m
+# from which it is used). The PRD's cluster LOD tree (§9.1) is the spike's
+# comparison to this simple chain.
+LODS = [(0.25, 150), (0.0625, 600)]
+
+
+def make_lods(glb: Path, asset_id: str) -> list[dict]:
+    lods = []
+    for i, (ratio, from_m) in enumerate(LODS, 1):
+        out = ASSETS / f"{asset_id}-lod{i}.glb"
+        subprocess.run(["npx", "--yes", "@gltf-transform/cli", "simplify", str(glb.resolve()), str(out.resolve()),
+                        "--ratio", str(ratio), "--error", "0.01"], check=True, cwd=ROOT / "web", shell=sys.platform == "win32")
+        lods.append({"url": out.name, "from_m": from_m})
+    return lods
+
+
 def las_to_glb(src: Path, dst: Path) -> None:
     import laspy
     import numpy as np
@@ -89,9 +105,11 @@ def main():
 
     ASSETS.mkdir(parents=True, exist_ok=True)
     ext = args.file.suffix.lower()
+    lods = []
     if ext in (".glb", ".gltf"):
         kind, out = "mesh", ASSETS / f"{args.id}.glb"
         optimise_glb(args.file, out)
+        lods = make_lods(out, args.id)
     elif ext in (".ply", ".spz", ".splat"):
         kind, out = "splat", ASSETS / f"{args.id}{ext}"
         shutil.copy(args.file, out)
@@ -108,7 +126,7 @@ def main():
         "lon": args.lon, "lat": args.lat, "h": args.h, "heading": args.heading, "scale": args.scale,
         "up": args.up, "site": args.site, "start": args.start, "end": args.end,
         "captured": args.captured, "creator": args.creator, "licence": args.licence,
-        "source": args.source, "note": args.note, "bytes": out.stat().st_size,
+        "source": args.source, "note": args.note, "bytes": out.stat().st_size, "lods": lods,
     })
     MANIFEST.write_text(json.dumps(manifest, indent=1, ensure_ascii=False), encoding="utf-8")
     print(f"{kind} {out.name}: {out.stat().st_size / 1e6:.1f} MB -> {MANIFEST}")

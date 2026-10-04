@@ -18,7 +18,8 @@
   "licence": "CC BY 4.0",
   "source": "https://doi.org/10.5281/zenodo.10301064",
   "note": "Not a real splat capture: Gaussians sampled from the textured mesh to test the splat path (PRD A2).",
-  "bytes": 16999872
+  "bytes": 16999872,
+  "lods": []
  },
  {
   "id": "skaptopara-scan",
@@ -39,6 +40,16 @@
   "licence": "CC BY 4.0",
   "source": "https://doi.org/10.5281/zenodo.10301064",
   "note": "Georeference approximate: placed at the Pleiades point for Scaptopara; scale and orientation not documented by the source.",
-  "bytes": 1521944
+  "bytes": 1521944,
+  "lods": [
+   {
+    "url": "skaptopara-scan-lod1.glb",
+    "from_m": 150
+   },
+   {
+    "url": "skaptopara-scan-lod2.glb",
+    "from_m": 600
+   }
+  ]
  }
 ]

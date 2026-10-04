@@ -473,6 +473,12 @@ async function main(): Promise<void> {
 
 main();
 
+// Installable app (PWA / TWA packaging, PRD §4.1); not in development, where
+// a cached shell would hide changes.
+if ("serviceWorker" in navigator && !import.meta.env.DEV) {
+  navigator.serviceWorker.register(`${BASE}sw.js`).catch(() => undefined);
+}
+
 if (import.meta.env.DEV) {
   Object.assign(window, { atlas: { terrain, sites, shapes, assets, tools, controls, camera, renderer, scene, device, profile, adaptive, xr, world } });
 }

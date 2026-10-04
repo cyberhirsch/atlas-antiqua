@@ -35,6 +35,7 @@ export interface AssetInfo {
   licence: string;
   source: string | null;
   note: string | null;
+  lods?: { url: string; from_m: number }[];
 }
 
 interface Loaded {
@@ -139,7 +140,17 @@ export class Assets {
       l.inner = mesh;
     } else {
       const g = await this.gltf.loadAsync(url);
-      l.inner = g.scene;
+      if (l.info.lods?.length) {
+        // Simpler versions switch in with distance (THREE.LOD, distances in metres).
+        const lod = new THREE.LOD();
+        lod.addLevel(g.scene, 0);
+        for (const level of l.info.lods) {
+          lod.addLevel((await this.gltf.loadAsync(`${BASE}assets/${level.url}`)).scene, level.from_m);
+        }
+        l.inner = lod;
+      } else {
+        l.inner = g.scene;
+      }
     }
     // Z-up scans are turned to glTF's Y-up first. Scans come with arbitrary
     // local origins, so the model is centred on its footprint and set down
