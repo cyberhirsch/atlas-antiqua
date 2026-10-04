@@ -225,7 +225,7 @@ class Dgm1:
         x, y = self.to_utm.transform(lons, lats)
         x, y = np.asarray(x), np.asarray(y)
         out = np.full(lons.shape, np.nan)
-        factor = max(1, int(step_m))  # decimate 1 m data to the sample spacing
+        factor = min(max(1, int(step_m)), 500)  # decimate 1 m data to the sample spacing
         keys = set(zip((x // 1000).astype(int).ravel(), (y // 1000).astype(int).ravel()))
         for key in keys:
             if key not in self.tiles:
@@ -239,9 +239,15 @@ class Dgm1:
             cols = (x[m] - key[0] * 1000) / factor - 0.5
             rows = ((key[1] + 1) * 1000 - y[m]) / factor - 0.5
             out[m] = bilinear(a, np.clip(rows, 0, a.shape[0] - 1), np.clip(cols, 0, a.shape[1] - 1))
-        # DHHN2016 -> EGM2008: smooth, so one offset per tile is enough (a few cm)
-        cx, cy = float(np.nanmean(x)), float(np.nanmean(y))
+        # DHHN2016 -> EGM2008: smooth, so one offset per tile is enough (a few cm).
+        # Taken inside the LiDAR area: a coarse tile's centre can lie outside
+        # the German geoid grid, where pyproj returns infinity.
+        x0, y0, x1, y1 = self.rect
+        cx = min(max(float(np.mean(x)), x0), x1)
+        cy = min(max(float(np.mean(y)), y0), y1)
         _, _, h = self.to_egm.transform(cx, cy, 0.0)
+        if not math.isfinite(h):
+            raise RuntimeError(f"DHHN2016 -> EGM2008 offset unavailable at {cx:.0f}, {cy:.0f}")
         out += h
         x0, y0, x1, y1 = self.rect
         d = np.minimum.reduce([x - x0, x1 - x, y - y0, y1 - y])
@@ -296,6 +302,8 @@ def build_tile(z, x, y, etopo, glo, dgm, max_global):
     path = OUT / str(z) / str(x) / f"{y}.png"
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
+    if not np.isfinite(h).all():
+        raise RuntimeError(f"tile {z}/{x}/{y} has non-finite heights")
     encode(h).save(tmp, format="PNG", optimize=True)
     tmp.replace(path)  # never leave a half-written tile
 
