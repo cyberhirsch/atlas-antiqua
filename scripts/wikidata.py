@@ -37,6 +37,7 @@ ENDPOINT = "https://query.wikidata.org/sparql"
 AGENT = "AtlasAntiqua/0.1 (https://github.com/cyberhirsch/atlas-antiqua)"
 REGION = (-10, 25, 45, 55)  # lon/lat box of the Pleiades data, queried in 5° tiles
 LANGS = "en,mul,de,fr,it,es,el,tr,ar,bg,hr,sr,pt"
+MIN_TILE = 0.15625  # smallest tile (degrees) a timed-out region is split into
 
 Q_PLEIADES = f"""
 SELECT ?item ?pleiades ?label ?article ?image WHERE {{
@@ -134,6 +135,7 @@ def main():
     # 2. Archaeological sites without a Pleiades ID, in 5° tiles.
     print("Wikidata archaeological sites in the Pleiades region")
     items = {}
+    uncovered = []
     w0, s0, e0, n0 = REGION
 
     def tile_rows(w, s, size):
@@ -141,10 +143,14 @@ def main():
         name = f"sites_{w}_{s}.json" if size == 5 else f"sites_{w}_{s}_{size}.json"
         q = Q_SITES.format(w=w, s=s, e=w + size, n=s + size, langs=LANGS)
         try:
-            return sparql(q, CACHE / name, args.refresh, attempts=2 if size > 1.25 else 4)
+            return sparql(q, CACHE / name, args.refresh, attempts=2 if size > MIN_TILE else 3)
         except RuntimeError:
-            if size <= 1.25:
-                raise
+            if size <= MIN_TILE:
+                # Still too dense for the public endpoint: skipped and listed,
+                # never silently.
+                uncovered.append([w, s, w + size, s + size])
+                print(f"  giving up on {w},{s} ({size}°)")
+                return []
             half = size / 2
             print(f"  splitting {w},{s} ({size}°)")
             return [r for dw in (0, half) for ds in (0, half) for r in tile_rows(w + dw, s + ds, half)]
@@ -190,7 +196,10 @@ def main():
         out.writeheader()
         out.writerows(review)
     (OUT / "wikidata-sites.json").write_text(json.dumps(new, ensure_ascii=False), encoding="utf-8")
+    (OUT / "wikidata-uncovered.json").write_text(json.dumps(uncovered), encoding="utf-8")
     print(f"{len(links)} Pleiades sites linked, {len(review)} pairs to review, {len(new)} sites only in Wikidata")
+    if uncovered:
+        print(f"{len(uncovered)} tiles could not be queried (listed in wikidata-uncovered.json)")
 
 
 if __name__ == "__main__":

@@ -200,6 +200,7 @@ for (const p of PLACES) {
 // Filters (S2, D8).
 const filters: Filters = { hiddenCategories: new Set(), country: null, minConf: [0, 0, 0, 0], onlyShapes: false, onlyAssets: false };
 function applyFilters(): void {
+  filterVersion++;
   sites.setFilters(filters);
   map2d.refresh();
   saveUrl();
@@ -257,6 +258,9 @@ function showXr(d: Device): void {
 // --- main loop ---------------------------------------------------------------
 
 const stats = $("#stats");
+let viewSig = "";
+let stillFrames = 0;
+let filterVersion = 0; // bumped when time or filters change, to refresh clusters
 // Technical status line only with ?debug.
 stats.hidden = !new URLSearchParams(location.search).has("debug");
 let frame = 0;
@@ -335,12 +339,19 @@ function tick(now: number, xrFrame?: XRFrame): void {
     if (gc !== undefined && hc < gc + 5 && dot(sub(cam, controls.target()), enu(controls.lon, controls.lat)[2]) < controls.range) {
       controls.range *= 1.15;
     }
-    clusters.update(sites, camera, cam, el.clientWidth, el.clientHeight, controls.range);
     saveUrl();
     const s = terrain.stats;
     stats.textContent = `${profile.name} · ${Math.round(adaptive.fps)} fps · detail ${adaptive.sse.toFixed(1)} px · scale ${adaptive.scale.toFixed(2)} · tiles ${s.rendered} drawn · level ${s.maxLevel} · ${s.loading} loading · ${s.gpuMB} MB · ${s.downloads} downloaded · ${s.hits} from cache · ${s.wasted} unused · ${s.aborted} aborted · ${controls.lat.toFixed(4)}, ${controls.lon.toFixed(4)} · ${Math.round(controls.range)} m`;
   }
-  if (frame % 30 === 0 && timeline) {
+  // Clusters and the period list scan all sites (about 50 ms with Wikidata),
+  // so they update only once the view has come to rest after a change.
+  const sig = `${controls.lon.toFixed(5)},${controls.lat.toFixed(5)},${controls.range.toFixed(0)},${controls.heading.toFixed(3)},${controls.pitch.toFixed(3)},${el.clientWidth}x${el.clientHeight},${filterVersion}`;
+  if (sig !== viewSig) {
+    if (stillFrames >= 8) clusters.clear(); // bubbles would sit at old screen positions
+    viewSig = sig;
+    stillFrames = 0;
+  } else if (++stillFrames === 8 && !xr.mode && timeline) {
+    clusters.update(sites, camera, cam, el.clientWidth, el.clientHeight, controls.range);
     // Period picker: periods attested within about 300 km of the view (T5).
     const local = new Set<number>();
     const r = 300 / 111;
@@ -364,6 +375,7 @@ async function main(): Promise<void> {
   // Time (T1-T6).
   timeline = new Timeline($("#time"), sites.periods);
   timeline.onChange = (t) => {
+    filterVersion++;
     sites.setTime(t);
     shapes.setTime(t);
     assets.setTime(t);
