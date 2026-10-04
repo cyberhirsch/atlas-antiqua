@@ -79,9 +79,12 @@ NON_SITE_TYPES = {
     "territory", "satrapy", "league", "tribus", "diocese-roman", "district",
     "nome-egyptian", "nome-gr", "pagus", "regio-augusti", "cultural-landscape",
     "protected-area-modern",
-    "label", "unlocated", "unlocated-group",
+    "label", "unlocated-group",
     "false", "false toponym", "fiction",
 }
+# Say nothing about whether a place is an archaeological site.
+GENERIC_TYPES = {"unknown", "feature", "unlabeled", "numbered feature", "labeled feature", "place",
+                 "settlement-modern"}
 # Kept out even when the place also has a site type.
 FALSE_TYPES = {"false", "false toponym", "fiction"}
 
@@ -235,6 +238,8 @@ def time_bounds(records, ranges, present_he):
                 "latest": min(to_he(hi), present_he),
                 "range_from": how,
             })
+            # The record's range bounds the site, but it is not this period's
+            # range: the period never appears alone, so its own range is unknown.
     if not periods:
         return None
 
@@ -248,12 +253,15 @@ def time_bounds(records, ranges, present_he):
         if (x["id"], x["confidence"]) not in seen:
             seen.add((x["id"], x["confidence"]))
             unique.append(x)
+    start = min(x["earliest"] for x in basis)
+    end = max(x["latest"] for x in basis)
+    published = [{**x, "earliest": None, "latest": None} if x["range_from"] == "record" else x for x in unique]
     return {
         "status": "dated",
-        "start": min(x["earliest"] for x in basis),
-        "end": max(x["latest"] for x in basis),
+        "start": start,
+        "end": end,
         "ongoing": raw_end >= present_he,
-        "periods": unique,
+        "periods": published,
         "level": level,
         "basis": "confident" if confident else "all",
     }
@@ -601,11 +609,47 @@ def centroid(geom):
 
 
 def location_precision(location):
-    """Accuracy of one location in metres: stated, or half its extent."""
-    if location.get("accuracy_value") is not None:
-        return float(location["accuracy_value"])
+    """Accuracy of one location in metres: stated, or half its extent.
+
+    For uncertainty areas (grid boxes) the box itself is the precision, even
+    when an accuracy is stated (TAVO cells say 1524 m but span 0.5°).
+    """
     half = extent_m(coords_of(location["geometry"])) / 2
+    if location.get("accuracy_value") is not None:
+        stated = float(location["accuracy_value"])
+        return round(max(stated, half)) if is_uncertainty_area(location) else stated
     return round(half) if half > 0 else None
+
+
+def is_rectangle(geom):
+    if geom["type"] != "Polygon" or len(geom["coordinates"]) != 1:
+        return False
+    ring = geom["coordinates"][0]
+    xs = {round(p[0], 6) for p in ring}
+    ys = {round(p[1], 6) for p in ring}
+    return len(ring) == 5 and len(xs) == 2 and len(ys) == 2
+
+
+def is_uncertainty_area(location):
+    """A box marking where a place lies (Barrington map grid, TAVO cell),
+    not the site's footprint."""
+    g = location.get("geometry") or {}
+    lid = (location.get("id") or "").lower()
+    title = (location.get("title") or "").lower()
+    prov = (location.get("provenance") or "").lower()
+    if "undetermined" in lid or "undetermined" in title or lid.startswith("gane-location"):
+        return True
+    return is_rectangle(g) and (location.get("accuracy_value") is None or "barrington" in prov or "tavo" in prov)
+
+
+def is_label(location):
+    """The curve an atlas label is drawn along, not a feature."""
+    return "label" in (location.get("id") or "").lower()
+
+
+def is_outline(location):
+    """Geometry that describes the site itself (usable for size and LOD 0)."""
+    return not is_uncertainty_area(location) and not is_label(location)
 
 
 def time_rule_of(time, source):
@@ -644,7 +688,9 @@ def build(places, present_he):
         if set(types) & FALSE_TYPES:
             skipped["false or fictional"] += 1
             continue
-        if types and not set(types) - NON_SITE_TYPES:
+        # Dropped when typed as a non-site and nothing more specific; generic
+        # types alone (e.g. "unknown") keep a place, they cannot rescue one.
+        if set(types) & NON_SITE_TYPES and not set(types) - NON_SITE_TYPES - GENERIC_TYPES:
             skipped["not a site: " + "/".join(sorted(types))] += 1
             continue
         if not p.get("reprPoint"):
@@ -697,7 +743,7 @@ def build(places, present_he):
         time.pop("basis")
 
         # size
-        geoms = [l["geometry"] for l in ancient]
+        geoms = [l["geometry"] for l in ancient if is_outline(l)]
         pts = [pt for g in geoms for pt in coords_of(g)]
         size = {
             "area_m2": round(max((area_m2(g) for g in geoms), default=0.0)) or None,
@@ -736,7 +782,7 @@ def build(places, present_he):
                          inbound_links=inbound[pid]),
             "remains": sorted({l.get("archaeologicalRemains") for l in ancient
                                if l.get("archaeologicalRemains")}),
-            "shape_count": len(located),
+            "shape_count": sum(1 for l in located if is_outline(l)),
             "licence": [licence] + (["ODbL 1.0"] if odbl else []),
             "odbl": odbl,
             "provenance": {
@@ -746,7 +792,7 @@ def build(places, present_he):
             "record": uri,
         })
 
-        for l in located:
+        for l in (x for x in located if is_outline(x)):
             lt = time_bounds([l], ranges, present_he)
             l_prec = location_precision(l)
             l_pos, l_pos_rule = position_level(l_prec, True)

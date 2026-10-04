@@ -482,5 +482,5 @@ if ("serviceWorker" in navigator && !import.meta.env.DEV) {
 }
 
 if (import.meta.env.DEV) {
-  Object.assign(window, { atlas: { terrain, sites, shapes, assets, tools, controls, camera, renderer, scene, device, profile, adaptive, xr, world } });
+  Object.assign(window, { atlas: { terrain, sites, shapes, assets, tools, controls, camera, renderer, scene, device, profile, adaptive, xr, world, tick } });
 }

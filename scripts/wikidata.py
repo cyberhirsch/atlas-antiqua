@@ -62,10 +62,10 @@ SELECT ?item ?label ?coord ?precision ?article ?inception WHERE {{
 }}"""
 
 
-def sparql(query: str, cache: Path, refresh: bool) -> list[dict]:
+def sparql(query: str, cache: Path, refresh: bool, attempts: int = 4) -> list[dict]:
     if cache.exists() and not refresh:
         return json.loads(cache.read_text(encoding="utf-8"))
-    for attempt in range(4):
+    for attempt in range(attempts):
         req = urllib.request.Request(ENDPOINT, data=urllib.parse.urlencode({"query": query}).encode(),
                                      headers={"User-Agent": AGENT, "Accept": "application/sparql-results+json"})
         try:
@@ -135,10 +135,23 @@ def main():
     print("Wikidata archaeological sites in the Pleiades region")
     items = {}
     w0, s0, e0, n0 = REGION
+
+    def tile_rows(w, s, size):
+        """Rows for one tile; a tile that times out is split into four."""
+        name = f"sites_{w}_{s}.json" if size == 5 else f"sites_{w}_{s}_{size}.json"
+        q = Q_SITES.format(w=w, s=s, e=w + size, n=s + size, langs=LANGS)
+        try:
+            return sparql(q, CACHE / name, args.refresh, attempts=2 if size > 1.25 else 4)
+        except RuntimeError:
+            if size <= 1.25:
+                raise
+            half = size / 2
+            print(f"  splitting {w},{s} ({size}°)")
+            return [r for dw in (0, half) for ds in (0, half) for r in tile_rows(w + dw, s + ds, half)]
+
     for w in range(w0, e0, 5):
         for s in range(s0, n0, 5):
-            q = Q_SITES.format(w=w, s=s, e=w + 5, n=s + 5, langs=LANGS)
-            for row in sparql(q, CACHE / f"sites_{w}_{s}.json", args.refresh):
+            for row in tile_rows(w, s, 5):
                 m = re.match(r"Point\(([-\d.eE]+) ([-\d.eE]+)\)", row["coord"])
                 if not m:
                     continue
