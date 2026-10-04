@@ -44,6 +44,7 @@ interface Loaded {
   inner?: THREE.Object3D; // the loaded model
   state: "loading" | "ready" | "failed";
   hidden: boolean;        // switched off by hand (phase toggle)
+  radius?: number;        // footprint radius in metres
 }
 
 export class Assets {
@@ -165,12 +166,31 @@ export class Assets {
     const centre = box.getCenter(new THREE.Vector3());
     turn.position.set(-centre.x, -box.min.y, -centre.z);
     l.root.add(turn);
+    // Footprint radius (m), for resting the asset on the terrain.
+    l.radius = Math.hypot(box.max.x - box.min.x, box.max.z - box.min.z) / 2 * l.info.scale;
+  }
+
+  /**
+   * Without an explicit height, an asset rests on the highest terrain point
+   * under its footprint (centre and 16 points on its rim), so the surface
+   * model (with trees and slopes) never buries it.
+   */
+  private restHeight(a: AssetInfo, radius: number): number {
+    let h = this.heightAt(a.lon, a.lat) ?? 0;
+    const mLat = 1 / 111320;
+    const mLon = 1 / (111320 * Math.cos(a.lat * DEG));
+    for (let i = 0; i < 16; i++) {
+      const t = (i / 16) * 2 * Math.PI;
+      const g = this.heightAt(a.lon + Math.sin(t) * radius * mLon, a.lat + Math.cos(t) * radius * mLat);
+      if (g !== undefined) h = Math.max(h, g);
+    }
+    return h;
   }
 
   /** Local frame at the asset: x east, y up, z south (three.js Y-up). */
   private place(l: Loaded, cam: Vec3): void {
     const a = l.info;
-    const h = a.h ?? this.heightAt(a.lon, a.lat) ?? 0;
+    const h = a.h ?? this.restHeight(a, l.radius ?? 0);
     const origin = ecef(a.lon, a.lat, h);
     const [e, n, u] = enu(a.lon, a.lat);
     const basis = new THREE.Matrix4().makeBasis(
