@@ -30,6 +30,17 @@ const BASE = import.meta.env.BASE_URL;
 const $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
 
 const el = $("#view");
+// Development only: ?emulate=quest installs Meta's WebXR emulator (IWER) as
+// a Quest 3 with controllers, so the XR modes can be tested without a headset
+// (tests/xr-emulation.mjs).
+let xrDevice: unknown;
+if (import.meta.env.DEV && new URLSearchParams(location.search).has("emulate")) {
+  const iwer = await import("iwer");
+  const dev = new iwer.XRDevice(iwer.metaQuest3);
+  dev.installRuntime({ forceInstall: true }); // desktop Chrome has a native navigator.xr
+  xrDevice = dev;
+}
+
 // The renderer is created after device detection, which picks antialiasing
 // and resolution (quality.ts).
 const device: Device = await detectDevice();
@@ -224,13 +235,14 @@ function saveUrl(): void {
 const xrOverlay = $("#xr-overlay");
 const xr = new Xr(renderer, world, xrOverlay);
 xr.heightAt = (lon, lat) => terrain.heightAt(lon, lat);
-xr.pickGround = (r) => {
-  ray.set(r.origin, r.direction);
-  ray.far = 5000;
-  const hit = ray.intersectObjects(terrain.meshes(), false)[0];
-  return hit ? geodetic(add(lastOrigin, [hit.point.x, hit.point.y, hit.point.z])) : undefined;
-};
+xr.scene = scene;
+scene.add(xr.rig);
+// Teleport target from the finest loaded heights, not from the drawn meshes:
+// right after entering VR only coarse tiles are drawn, and their surface lies
+// below the true ground, so a ray aimed a few metres ahead would pass over it.
+xr.pickGround = (r) => marchGround(r.origin, r.direction);
 xr.onEnd = () => {
+  xr.rig.remove(camera); // back to the globe camera
   terrain.visible = true;
   resize();
 };
@@ -302,6 +314,12 @@ function tick(now: number, xrFrame?: XRFrame): void {
   let view: THREE.PerspectiveCamera = camera;
   if (xr.mode) {
     xr.poll(now);
+    // The camera rides in the rig; three.js applies the rig to the head pose.
+    if (camera.parent !== xr.rig) {
+      xr.rig.add(camera);
+      camera.position.set(0, 0, 0);
+      camera.quaternion.identity();
+    }
     const xrCam = renderer.xr.getCamera();
     const f = xr.frame(xrCam, xrFrame);
     cam = f.cam;
@@ -328,7 +346,7 @@ function tick(now: number, xrFrame?: XRFrame): void {
   shapes.update(origin, controls.lon, controls.lat, xr.mode ? 1000 : controls.range);
   assets.update(origin);
   tools.update(origin, now);
-  renderer.render(scene, view);
+  renderer.render(scene, camera); // in XR, three.js renders through the XR camera
 
   if (++frame % 10 === 0 && !xr.mode) {
     // Ground height under the target, and keep the camera above the ground.
@@ -494,5 +512,5 @@ if ("serviceWorker" in navigator && !import.meta.env.DEV) {
 }
 
 if (import.meta.env.DEV) {
-  Object.assign(window, { atlas: { terrain, sites, shapes, assets, tools, controls, camera, renderer, scene, device, profile, adaptive, xr, world, tick } });
+  Object.assign(window, { atlas: { terrain, sites, shapes, assets, tools, controls, camera, renderer, scene, device, profile, adaptive, xr, world, tick, xrDevice } });
 }

@@ -7,9 +7,12 @@
 // - AR tabletop: the same miniature on a real table, placed by tapping a
 //   detected surface (X4)
 //
-// The XR reference space is rotated so that poses come out in Earth-fixed
-// (ECEF) axes. The rest of the viewer then works unchanged: it only needs
-// the camera position in ECEF and the floating origin.
+// The XR camera and controllers hang in a rig whose rotation turns the
+// local XR frame (x right, y up, -z forward) into Earth-fixed (ECEF) axes;
+// three.js multiplies the rig into every pose. The rest of the viewer then
+// works unchanged: it only needs the camera position in ECEF and the floating
+// origin. (An offset reference space would do the same, but not every WebXR
+// runtime applies its orientation; the emulator does not.)
 
 import * as THREE from "three";
 import { Vec3, add, ecef, enu, geodetic, scale } from "./geo";
@@ -30,7 +33,6 @@ export class Xr {
   mode: XrMode | null = null;
   private anchor = { lon: 0, lat: 0, h: 0, heading: 0 };
   private world: THREE.Group;
-  private base?: XRReferenceSpace;
   private session?: XRSession;
   private hitSource?: XRHitTestSource;
   private tablePos = new THREE.Vector3(0, 0.9, -1.2);
@@ -62,7 +64,6 @@ export class Xr {
     this.renderer.xr.enabled = true;
     this.renderer.xr.setReferenceSpaceType(ar ? "local" : "local-floor");
     await this.renderer.xr.setSession(session);
-    this.base = this.renderer.xr.getReferenceSpace()!;
     if (mode === "ar-table") {
       const viewer = await session.requestReferenceSpace("viewer");
       this.hitSource = await session.requestHitTestSource!({ space: viewer });
@@ -108,12 +109,14 @@ export class Xr {
     this.anchor.heading = ((heading ?? 0) * Math.PI) / 180;
   }
 
+  /** Rig holding the XR camera and controllers; its matrix is the local-to-ECEF rotation. */
+  readonly rig = new THREE.Group();
+
   /**
-   * Rotate the reference space so poses are in ECEF axes, turned by the
-   * anchor heading (the user's forward direction at the start).
+   * Turn the rig so poses come out in ECEF axes, with the user's forward
+   * direction at the anchor heading.
    */
   private applyReference(): void {
-    if (!this.base) return;
     const [e, n, u] = enu(this.anchor.lon, this.anchor.lat);
     // Local XR frame: x right, y up, -z forward (= heading on the ground).
     const ch = Math.cos(this.anchor.heading);
@@ -122,9 +125,9 @@ export class Xr {
     const right = add(scale(e, ch), scale(n, -sh));
     const m = new THREE.Matrix4().makeBasis(
       new THREE.Vector3(...right), new THREE.Vector3(...u), new THREE.Vector3(-fwd[0], -fwd[1], -fwd[2]));
-    const q = new THREE.Quaternion().setFromRotationMatrix(m).invert();
-    const space = this.base.getOffsetReferenceSpace(new XRRigidTransform({ x: 0, y: 0, z: 0, w: 1 }, { x: q.x, y: q.y, z: q.z, w: q.w }));
-    this.renderer.xr.setReferenceSpace(space);
+    this.rig.matrixAutoUpdate = false;
+    this.rig.matrix.copy(m);
+    this.rig.matrixWorldNeedsUpdate = true;
     this.worldBasis = m;
   }
 
@@ -159,12 +162,22 @@ export class Xr {
   private controllers(): void {
     for (const i of [0, 1]) {
       const c = this.renderer.xr.getController(i);
-      c.addEventListener("selectstart", () => this.teleport(c));
+      // In the rig, so three.js turns its pose into ECEF axes and keeps its
+      // world matrix current; the teleport ray starts from it.
+      if (c.parent !== this.rig) this.rig.add(c);
+      if (!c.userData.atlasTeleport) {
+        c.userData.atlasTeleport = true;
+        c.addEventListener("selectstart", () => this.teleport(c));
+      }
     }
   }
 
+  /** The scene, for the controller objects (set by the page). */
+  scene?: THREE.Scene;
+
   private teleport(controller: THREE.Object3D): void {
     if (this.mode !== "vr") return;
+    controller.updateMatrixWorld(true);
     const ray = new THREE.Ray();
     ray.origin.setFromMatrixPosition(controller.matrixWorld);
     ray.direction.set(0, 0, -1).transformDirection(controller.matrixWorld);

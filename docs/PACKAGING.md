@@ -17,7 +17,9 @@ What still needs accounts and keys, and so stays a manual step:
 3. Upload the APK to a Meta Horizon developer app (needs a Meta developer
    account) and test it on a headset before release.
 
-Test first in the Quest Browser: open the site, press "Enter VR".
+Without a headset: `node web/tests/xr-emulation.mjs` (with `npm run dev`
+running) drives every XR mode on Meta's emulated Quest 3 in headless Chrome.
+Then test in the Quest Browser: open the site, press "Enter VR".
 
 ## Android (Trusted Web Activity in Google Play)
 

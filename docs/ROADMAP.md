@@ -45,7 +45,11 @@ Status as of 2026-10-04. Live test viewer: https://cyberhirsch.github.io/atlas-a
 
 - [x] WebXR VR at 1:1 with teleport and snap turning; VR table mode
 - [x] WebXR AR on site (GPS and compass, manual alignment); AR tabletop
-- [ ] Test on devices; package as Quest PWA and Android TWA (docs/PACKAGING.md)
+- [x] Tested on an emulated Meta Quest 3 (Meta's IWER, `web/tests/xr-emulation.mjs`):
+      VR, VR table, AR on site, AR tabletop, teleport, snap turn, alignment;
+      14/14 checks pass
+- [ ] Test on a physical Quest and Android phone; package as Quest PWA and
+      Android TWA (docs/PACKAGING.md)
 
 ## M5: Coverage
 

@@ -13,9 +13,8 @@ remote="$(git -C "$root" remote get-url origin)"
 out="$(mktemp -d)"
 
 # MSYS_NO_PATHCONV: Git Bash on Windows would turn /atlas-antiqua/ into a Windows path.
-(cd "$root/web" && MSYS_NO_PATHCONV=1 ATLAS_BASE=/atlas-antiqua/ npm run build)
-
-cp -r "$root/web/dist/." "$out"
+# Built straight into the temporary folder, so no second copy lands next to the source.
+(cd "$root/web" && npx tsc --noEmit && MSYS_NO_PATHCONV=1 ATLAS_BASE=/atlas-antiqua/ npx vite build --outDir "$out" --emptyOutDir)
 touch "$out/.nojekyll"
 cd "$out"
 git init -q -b gh-pages
