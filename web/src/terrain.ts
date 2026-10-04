@@ -20,6 +20,8 @@ const MAX_LOADS = 10;             // concurrent tile loads
 const ABORT_AFTER = 30;           // frames a loading tile may go unused
 const LOAD_TIMEOUT = 20000;       // ms before a hanging load is aborted and retried
 const RETRY_AFTER = 10000;        // ms before a failed tile is tried again
+const KEEP_MS = 5000;             // unused tiles stay at least this long
+const KEEP_LEVEL = 6;             // levels up to this are never evicted
 const MAX_HEIGHT = 9000;          // upper bound before a tile's heights are known
 const MIN_HEIGHT = -500;
 
@@ -53,8 +55,10 @@ class Tile {
   mesh?: THREE.Mesh;
   kids?: Tile[];
   lastUsed = 0;
+  usedAt = 0; // performance.now() of the last frame that needed it
   bytes = 0;
   drawn = false;
+  refined = false; // replaced by its children in the last frame
   abort?: AbortController;
   failedAt = 0;
 
@@ -136,8 +140,6 @@ export class Terrain {
   private frustum = new THREE.Frustum();
   private sphere = new THREE.Sphere();
   private matrix = new THREE.Matrix4();
-  private canvas = new OffscreenCanvas(1, 1);
-  private ctx = this.canvas.getContext("2d", { willReadFrequently: true })!;
   private terrainCache = new TileCache();
   private imageryCache = new TileCache();
   private gpuBytes = 0;
@@ -200,24 +202,32 @@ export class Terrain {
     const k = screenHeight / (2 * Math.tan((camera.fov * Math.PI) / 360));
 
     const render: Tile[] = [];
+    const now = performance.now();
     const visit = (t: Tile): void => {
       if (this.culled(t)) return;
       t.lastUsed = this.frame;
+      t.usedAt = now;
       if (t.state !== "ready") {
         this.request(t);
         return;
       }
       const sse = (t.error * k) / this.distance(t);
-      if (sse > this.quality.sse && this.canRefine(t)) {
+      // Hysteresis: a refined tile stays refined until clearly coarse enough,
+      // so tiles on the threshold do not flip between levels.
+      const threshold = t.refined ? this.quality.sse * 0.7 : this.quality.sse;
+      t.refined = false;
+      if (sse > threshold && this.canRefine(t)) {
         t.kids ??= [0, 1].flatMap((j) => [0, 1].map((i) => this.tile(t.z + 1, 2 * t.x + i, 2 * t.y + j, t)));
         const live = t.kids.filter((c) => !this.culled(c));
         for (const c of live) {
           c.lastUsed = this.frame;
+          c.usedAt = now;
           this.request(c);
         }
         // Replace this tile only when every visible child can be drawn;
         // otherwise parent and children would overlap.
         if (live.every((c) => c.state === "ready")) {
+          t.refined = true;
           for (const c of live) visit(c);
           return;
         }
@@ -336,12 +346,18 @@ export class Terrain {
   }
 
   private evict(): void {
-    if (this.gpuBytes <= this.quality.budgetBytes) return;
+    const budget = this.quality.budgetBytes;
+    if (this.gpuBytes <= budget) return;
+    // Tiles unused for a few seconds go first, finest and oldest first; only
+    // when far over budget are recently used ones taken. Coarse levels stay
+    // as a fallback, so turning the camera never shows holes.
+    const now = performance.now();
+    const over = this.gpuBytes > budget * 1.3;
     const old = [...this.tiles.values()]
-      .filter((t) => t.z > 0 && t.mesh && t.lastUsed < this.frame - 2)
-      .sort((a, b) => a.lastUsed - b.lastUsed);
+      .filter((t) => t.z > KEEP_LEVEL && t.mesh && t.lastUsed < this.frame - 2 && (over || now - t.usedAt > KEEP_MS))
+      .sort((a, b) => a.usedAt - b.usedAt || b.z - a.z);
     for (const t of old) {
-      if (this.gpuBytes <= this.quality.budgetBytes * 0.9) break;
+      if (this.gpuBytes <= budget * 0.9) break;
       this.dispose(t);
     }
     // Forget tiles that were never loaded and are long out of use.
@@ -425,17 +441,18 @@ export class Terrain {
   }
 
   private async heights(t: Tile, signal: AbortSignal): Promise<Float32Array> {
-    const buf = await this.terrainCache.get(`${TERRAIN_URL}/${t.key}.png`, signal);
-    const bmp = await createImageBitmap(new Blob([buf], { type: "image/png" }), { colorSpaceConversion: "none" });
+    // gzip of int32 decimetre deltas (scripts/build_terrain.py). Not an
+    // image: browsers may alter image colours, which corrupts packed heights.
+    const buf = await this.terrainCache.get(`${TERRAIN_URL}/${t.key}.hgt`, signal);
+    const raw = await new Response(new Blob([buf]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
+    const d = new Int32Array(raw);
     const n = this.regions.samples;
-    this.canvas.width = n;
-    this.canvas.height = n;
-    this.ctx.drawImage(bmp, 0, 0);
-    bmp.close();
-    const px = this.ctx.getImageData(0, 0, n, n).data;
+    if (d.length !== n * n) throw new Error(`terrain ${t.key}: ${d.length} samples`);
     const h = new Float32Array(n * n);
+    let v = 0;
     for (let i = 0; i < n * n; i++) {
-      h[i] = (px[4 * i] * 65536 + px[4 * i + 1] * 256 + px[4 * i + 2]) / 10 - 10000;
+      v += d[i];
+      h[i] = v / 10;
     }
     return h;
   }

@@ -1,6 +1,8 @@
 // Globe camera: orbits a target point on the ground. Left drag pans,
 // right drag (or shift + left drag) turns and tilts, the wheel zooms
-// towards the target. State is kept in double precision.
+// towards the target. Keys: W/S forward and back, A/D sideways, Q/E turn,
+// R/F zoom in and out; speed scales with the distance to the ground.
+// State is kept in double precision.
 
 import * as THREE from "three";
 import { Vec3, add, ecef, enu, scale, WGS84_A } from "./geo";
@@ -23,6 +25,8 @@ export class GlobeControls {
   private flight?: { from: View; to: View; t0: number; ms: number };
   private drag?: { x: number; y: number; rotate: boolean; moved: number };
   onClick?: (x: number, y: number) => void;
+  private keys = new Set<string>();
+  private lastFrame = 0;
 
   constructor(private el: HTMLElement, private camera: THREE.PerspectiveCamera) {
     el.addEventListener("pointerdown", (e) => {
@@ -49,6 +53,17 @@ export class GlobeControls {
       this.drag = undefined;
     });
     el.addEventListener("contextmenu", (e) => e.preventDefault());
+    window.addEventListener("keydown", (e) => {
+      if (e.target instanceof HTMLInputElement || e.ctrlKey || e.metaKey || e.altKey) return;
+      const k = e.key.toLowerCase();
+      if ("wasdqerf".includes(k) && k.length === 1) {
+        this.keys.add(k);
+        this.flight = undefined;
+        e.preventDefault();
+      }
+    });
+    window.addEventListener("keyup", (e) => this.keys.delete(e.key.toLowerCase()));
+    window.addEventListener("blur", () => this.keys.clear());
     el.addEventListener(
       "wheel",
       (e) => {
@@ -86,8 +101,36 @@ export class GlobeControls {
     return ecef(this.lon, this.lat, this.h);
   }
 
+  /** Move with the held keys; dt in seconds. */
+  private keyboard(dt: number): void {
+    if (!this.keys.size) return;
+    const k = this.keys;
+    // Ground speed: the view's height per second, so the screen moves at
+    // the same rate at any zoom.
+    const speed = this.range * Math.max(Math.cos(this.pitch) * 0.5, Math.abs(Math.sin(this.pitch))) * dt;
+    const forward = (k.has("w") ? 1 : 0) - (k.has("s") ? 1 : 0);
+    const right = (k.has("d") ? 1 : 0) - (k.has("a") ? 1 : 0);
+    if (forward || right) {
+      const ch = Math.cos(this.heading);
+      const sh = Math.sin(this.heading);
+      const east = (forward * sh + right * ch) * speed;
+      const north = (forward * ch - right * sh) * speed;
+      const deg = 180 / Math.PI / WGS84_A;
+      this.lat = Math.max(-89, Math.min(89, this.lat + north * deg));
+      this.lon += (east * deg) / Math.max(Math.cos((this.lat * Math.PI) / 180), 0.05);
+      this.lon = ((this.lon + 540) % 360) - 180;
+    }
+    const turn = (k.has("e") ? 1 : 0) - (k.has("q") ? 1 : 0);
+    this.heading += turn * 1.2 * dt;
+    const zoom = (k.has("f") ? 1 : 0) - (k.has("r") ? 1 : 0);
+    if (zoom) this.range = Math.min(4e7, Math.max(30, this.range * Math.exp(zoom * 1.5 * dt)));
+  }
+
   /** Camera position in ECEF. */
   update(now: number): Vec3 {
+    const dt = this.lastFrame ? Math.min((now - this.lastFrame) / 1000, 0.1) : 0;
+    this.lastFrame = now;
+    this.keyboard(dt);
     if (this.flight) {
       const f = this.flight;
       const t = Math.min(1, (now - f.t0) / f.ms);

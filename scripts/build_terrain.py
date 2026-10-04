@@ -6,8 +6,12 @@ southwards. Each tile holds 129 x 129 height samples on a regular lon/lat
 grid that includes both edges, so neighbouring tiles share their border.
 
 Heights are metres above the WGS84 ellipsoid (EGM2008 height plus the geoid
-undulation), so the viewer can place vertices directly; stored as
-Terrain-RGB PNG: h = (R * 65536 + G * 256 + B) / 10 - 10000.
+undulation), so the viewer can place vertices directly. Each tile is a
+gzip-compressed file ({y}.hgt) of 129 x 129 little-endian int32 values,
+row by row from the north-west corner: the first is the height in
+decimetres, each following one the difference to the previous sample.
+Not an image format on purpose: browsers may alter image colours when
+decoding, which corrupts heights packed into pixels.
 
 Sources, best first (each one blended into the next at its edge):
 - Bavarian DGM1 (1 m LiDAR, DHHN2016 -> EGM2008) in data/raw/dgm1, up to level 16
@@ -22,6 +26,7 @@ Usage: python scripts/build_terrain.py [--max-global 5]
 """
 
 import argparse
+import gzip
 import datetime
 import json
 import math
@@ -38,7 +43,6 @@ os.environ.setdefault("GDAL_CACHEMAX", "256")  # MB; the default is a share of s
 import numpy as np
 import pyproj
 import rasterio
-from PIL import Image
 from rasterio.windows import Window
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -279,9 +283,10 @@ def geoid_undulation(lons, lats):
 
 
 def encode(h):
-    v = np.clip(np.round((h + 10000.0) * 10.0), 0, 2 ** 24 - 1).astype(np.uint32)
-    rgb = np.stack([(v >> 16) & 255, (v >> 8) & 255, v & 255], axis=-1).astype(np.uint8)
-    return Image.fromarray(rgb, "RGB")
+    """Heights (m) -> gzip of int32 decimetre deltas, row-major."""
+    dm = np.round(h * 10.0).astype(np.int64).ravel()
+    deltas = np.diff(dm, prepend=0).astype("<i4")
+    return gzip.compress(deltas.tobytes(), compresslevel=9, mtime=0)
 
 
 def build_tile(z, x, y, etopo, glo, dgm, max_global):
@@ -299,12 +304,12 @@ def build_tile(z, x, y, etopo, glo, dgm, max_global):
         wd = wd * ~np.isnan(d)
         h = np.where(wd > 0, np.nan_to_num(d) * wd + h * (1 - wd), h)
     h = h + geoid_undulation(lons, lats)
-    path = OUT / str(z) / str(x) / f"{y}.png"
+    path = OUT / str(z) / str(x) / f"{y}.hgt"
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     if not np.isfinite(h).all():
         raise RuntimeError(f"tile {z}/{x}/{y} has non-finite heights")
-    encode(h).save(tmp, format="PNG", optimize=True)
+    tmp.write_bytes(encode(h))
     tmp.replace(path)  # never leave a half-written tile
 
 
@@ -333,7 +338,7 @@ def main():
     regions = {
         "scheme": "WGS84 quadtree, level z has 2^(z+1) x 2^z tiles; x from 180W, y from 90N",
         "samples": N,
-        "encoding": "terrain-rgb: h = (R*65536 + G*256 + B) / 10 - 10000, metres above the WGS84 ellipsoid",
+        "encoding": "gzip, int32 LE decimetre deltas row-major from the NW corner; metres above the WGS84 ellipsoid",
         "maxGlobal": args.max_global,
         "built": datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S"),
         "regions": [{"name": f"GLO-30 {lat:+03d} {lon:+04d}", "bbox": [lon, lat, lon + 1, lat + 1],
@@ -349,7 +354,7 @@ def main():
     t0 = time.time()
     while stack:
         z, x, y = stack.pop()
-        if not (OUT / str(z) / str(x) / f"{y}.png").exists():
+        if not (OUT / str(z) / str(x) / f"{y}.hgt").exists():
             build_tile(z, x, y, etopo, glo, dgm, args.max_global)
         done += 1
         if done % 500 == 0:
