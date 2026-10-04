@@ -44,6 +44,8 @@ FIELDS = ["id", "name", "lon", "lat", "h", "start", "end", "category", "confiden
 WD_LINKS = ROOT / "data" / "sites" / "wikidata-links.csv"
 WD_SITES = ROOT / "data" / "sites" / "wikidata-sites.json"
 AXES = ("identity", "position", "elevation", "time")
+MAX_AREA_M2 = 20e6    # larger polygons are not site outlines
+MAX_LENGTH_M = 300e3  # longer lines are routes across regions
 M_PER_DEG = 111320.0
 
 
@@ -167,8 +169,9 @@ def main():
     # Shapes first, to know which sites have them.
     shape_sites = set()
     for f in stream(SHAPES):
-        if f["geometry"]["type"] != "Point":
-            shape_sites.add(f["properties"]["site"])
+        pr = f["properties"]
+        if f["geometry"]["type"] != "Point" and (pr.get("area_m2") or 0) <= MAX_AREA_M2                 and (pr.get("length_m") or 0) <= MAX_LENGTH_M:
+            shape_sites.add(pr["site"])
 
     for f in stream(SITES):
         p = f["properties"]
@@ -251,6 +254,10 @@ def main():
         p = f["properties"]
         g = f["geometry"]
         if g["type"] == "Point" or p["site"] not in with_shapes:
+            continue
+        # Not site outlines: map-sheet areas standing in for rough locations,
+        # whole regions, long routes.
+        if (p.get("area_m2") or 0) > MAX_AREA_M2 or (p.get("length_m") or 0) > MAX_LENGTH_M:
             continue
         lift = lambda ring: [[round(x, 6), round(y, 6), round(heights.sample(x, y), 1)] for x, y, *_ in ring]
         if g["type"] in ("LineString",):

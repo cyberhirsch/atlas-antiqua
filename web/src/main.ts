@@ -257,6 +257,8 @@ function showXr(d: Device): void {
 // --- main loop ---------------------------------------------------------------
 
 const stats = $("#stats");
+// Technical status line only with ?debug.
+stats.hidden = !new URLSearchParams(location.search).has("debug");
 let frame = 0;
 
 function placeCamera(cam: Vec3): void {

@@ -71,11 +71,14 @@ export class Timeline {
     this.play = root.querySelector("#play")!;
     this.speedSel = root.querySelector("#speed")!;
     const ticks = root.querySelector(".ticks")!;
-    for (const y of [5000, 8000, 9000, 10000, 10500, 11000, 11500, 12000]) {
+    // Round BCE/CE years (HE = year + 10000 for CE, 10001 - year for BCE).
+    const marks: [number, string][] = [[8001, "2000 BCE"], [9001, "1000 BCE"], [10001, "1 CE"], [10500, "500"],
+      [11000, "1000"], [11500, "1500"], [12000, "2000"]];
+    for (const [y, label] of marks) {
       const t = document.createElement("span");
       t.style.left = `${toPos(y) * 100}%`;
-      t.textContent = y === 10000 ? "1 BCE/CE" : yearLabel(y).replace(" BCE", "").replace(" CE", "");
-      t.title = `${y} HE`;
+      t.textContent = label;
+      t.title = `${y} HE · ${yearLabel(y)}`;
       ticks.appendChild(t);
     }
     this.slider.addEventListener("input", () => {

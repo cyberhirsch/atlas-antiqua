@@ -41,7 +41,10 @@ export async function detectDevice(): Promise<Device> {
   const uaData = (navigator as Navigator & { userAgentData?: { mobile?: boolean } }).userAgentData;
   const mobile = !quest && (uaData?.mobile ?? /Android|iPhone|iPad|Mobile/i.test(ua));
   const xr = (navigator as Navigator & { xr?: { isSessionSupported(mode: string): Promise<boolean> } }).xr;
-  const supported = async (mode: string) => (xr ? xr.isSessionSupported(mode).catch(() => false) : false);
+  // Some environments never answer; do not let that block the start.
+  const supported = async (mode: string) => (xr
+    ? Promise.race([xr.isSessionSupported(mode).catch(() => false), new Promise<boolean>((ok) => setTimeout(() => ok(false), 1500))])
+    : false);
   const [ar, vr] = await Promise.all([supported("immersive-ar"), supported("immersive-vr")]);
   gl.getExtension("WEBGL_lose_context")?.loseContext();
   return { gpu, software: SOFTWARE_GPU.test(gpu), mobile, quest, ar, vr };
