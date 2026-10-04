@@ -509,3 +509,20 @@ See [ROADMAP.md](ROADMAP.md). In short:
    kept private?
 6. Elevation: take it from terrain models at import, or only from sources
    that state it?
+
+## 15. Implementation status
+
+Tracked per milestone in [ROADMAP.md](ROADMAP.md). As of 2026-10-04 every
+requirement in §7 has a first implementation in the test viewer, except:
+
+- **P3** (trusted roles with full precision, logged access): needs a back end
+  with accounts; the static site cannot protect data. Decision pending (§14.3).
+  Until then all public files hold coordinates at publication precision (P1).
+- **XR on devices** (X1-X6): built on WebXR, not yet tested on a Quest or an
+  Android phone; packaging steps in [PACKAGING.md](PACKAGING.md).
+- **Large scans as 3D Tiles** and the cluster LOD tree (§9.1): scans use a
+  simple LOD chain for now; the comparison belongs to the XR spike.
+
+Data decisions that stay with the owner: target licence of the merged set
+(§14.1), contribution and review rules (§14.2), student scan publishing
+(§14.5), and the review of `data/sites/merge-review.csv` (D2).
