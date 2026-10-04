@@ -1,6 +1,5 @@
 import * as THREE from "three";
 import { Assets } from "./assets";
-import { Clusters } from "./clusters";
 import { GlobeControls, View } from "./controls";
 import { Vec3, add, dot, enu, geodetic, length, sub, yearLabel } from "./geo";
 import { Map2D } from "./map2d";
@@ -219,8 +218,33 @@ function applyFilters(): void {
 
 const tools = new Tools(document.body, renderer.domElement, sites, pickGround, (lon, lat) => terrain.heightAt(lon, lat), project);
 world.add(tools.group);
-const clusters = new Clusters(document.body);
-clusters.onPick = (lon, lat, range) => controls.flyTo({ lon, lat, range, heading: controls.heading, pitch: controls.pitch });
+
+// Hover: the point under the mouse grows and shows its name.
+const hoverLabel = document.createElement("div");
+hoverLabel.className = "hover-label";
+hoverLabel.hidden = true;
+document.body.appendChild(hoverLabel);
+let hoverPending = false;
+renderer.domElement.addEventListener("pointermove", (e) => {
+  if (e.buttons || tools.active !== "none" || hoverPending) return;
+  hoverPending = true;
+  requestAnimationFrame(() => {
+    hoverPending = false;
+    const r = renderer.domElement.getBoundingClientRect();
+    const s = sites.pick(e.clientX - r.left, e.clientY - r.top, camera, lastCam, r.width, r.height, 10);
+    sites.setHover(s);
+    renderer.domElement.style.cursor = s ? "pointer" : "";
+    hoverLabel.hidden = !s;
+    if (s) {
+      hoverLabel.textContent = s.name;
+      hoverLabel.style.transform = `translate(${e.clientX + 14}px, ${e.clientY - 10}px)`;
+    }
+  });
+});
+renderer.domElement.addEventListener("pointerleave", () => {
+  sites.setHover(undefined);
+  hoverLabel.hidden = true;
+});
 const map2d = new Map2D($("#map2d"), sites);
 map2d.onPick = (s) => showSite(s);
 
@@ -272,7 +296,7 @@ function showXr(d: Device): void {
 const stats = $("#stats");
 let viewSig = "";
 let stillFrames = 0;
-let filterVersion = 0; // bumped when time or filters change, to refresh clusters
+let filterVersion = 0; // bumped when time or filters change, to refresh the period list
 // Technical status line only with ?debug.
 stats.hidden = !new URLSearchParams(location.search).has("debug");
 let frame = 0;
@@ -361,15 +385,13 @@ function tick(now: number, xrFrame?: XRFrame): void {
     const s = terrain.stats;
     stats.textContent = `${profile.name} · ${Math.round(adaptive.fps)} fps · detail ${adaptive.sse.toFixed(1)} px · scale ${adaptive.scale.toFixed(2)} · tiles ${s.rendered} drawn · level ${s.maxLevel} · ${s.loading} loading · ${s.gpuMB} MB · ${s.downloads} downloaded · ${s.hits} from cache · ${s.wasted} unused · ${s.aborted} aborted · ${controls.lat.toFixed(4)}, ${controls.lon.toFixed(4)} · ${Math.round(controls.range)} m`;
   }
-  // Clusters and the period list scan all sites (about 50 ms with Wikidata),
+  // The period list scans all sites (about 50 ms with Wikidata),
   // so they update only once the view has come to rest after a change.
   const sig = `${controls.lon.toFixed(5)},${controls.lat.toFixed(5)},${controls.range.toFixed(0)},${controls.heading.toFixed(3)},${controls.pitch.toFixed(3)},${el.clientWidth}x${el.clientHeight},${filterVersion}`;
   if (sig !== viewSig) {
-    if (stillFrames >= 8) clusters.clear(); // bubbles would sit at old screen positions
     viewSig = sig;
     stillFrames = 0;
   } else if (++stillFrames === 8 && !xr.mode && timeline) {
-    clusters.update(sites, camera, cam, el.clientWidth, el.clientHeight, controls.range);
     // Period picker: periods attested within about 300 km of the view (T5).
     const local = new Set<number>();
     const r = 300 / 111;
@@ -460,7 +482,6 @@ async function main(): Promise<void> {
   box2d.onchange = async () => {
     if (box2d.checked) {
       el.hidden = true;
-      clusters.clear();
       await map2d.show(controls.lon, controls.lat, controls.range);
     } else {
       const v = map2d.hide();

@@ -298,8 +298,43 @@ export class Sites {
     return this.passes(s) && this.timeAlpha(s) > 0.01;
   }
 
+  /** The site under the mouse, drawn larger on top. */
+  private hover?: { site: Site; points: THREE.Points };
+
+  setHover(s: Site | undefined): void {
+    if (this.hover?.site === s) return;
+    if (this.hover) {
+      this.group.remove(this.hover.points);
+      this.hover.points.geometry.dispose();
+      this.hover = undefined;
+    }
+    if (!s) return;
+    const g = new THREE.BufferGeometry().setAttribute("position", new THREE.Float32BufferAttribute([0, 0, 0], 3));
+    const c = new THREE.Color(CATEGORY_COLORS[s.category] ?? "#ffffff");
+    const mat = new THREE.ShaderMaterial({
+      uniforms: { uColor: { value: c }, uSize: { value: 16 * Math.min(window.devicePixelRatio, 2) } },
+      vertexShader: "uniform float uSize; void main() { gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); gl_PointSize = uSize; }",
+      fragmentShader: `uniform vec3 uColor; void main() {
+        float r = length(gl_PointCoord - 0.5);
+        if (r > 0.5) discard;
+        gl_FragColor = vec4(r > 0.4 ? vec3(1.0) : uColor, 1.0);
+      }`,
+      depthTest: false,
+      transparent: true,
+    });
+    const points = new THREE.Points(g, mat);
+    points.frustumCulled = false;
+    points.renderOrder = 12;
+    this.group.add(points);
+    this.hover = { site: s, points };
+  }
+
   update(cam: Vec3): void {
     this.material.uniforms.uCam.value.set(cam[0], cam[1], cam[2]);
+    if (this.hover) {
+      const p = this.hover.site.pos;
+      this.hover.points.position.set(p[0] - cam[0], p[1] - cam[1], p[2] - cam[2]);
+    }
     for (const ch of this.chunks) {
       const p = ch.origin;
       ch.points.position.set(p[0] - cam[0], p[1] - cam[1], p[2] - cam[2]);
