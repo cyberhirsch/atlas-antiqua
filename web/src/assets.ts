@@ -8,6 +8,7 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
+import { KTX2Loader } from "three/examples/jsm/loaders/KTX2Loader.js";
 import { Vec3, ecef, enu, sub, yearLabel } from "./geo";
 import type { TimeSelection } from "./sites";
 
@@ -48,13 +49,17 @@ export class Assets {
   readonly group = new THREE.Group();
   list: AssetInfo[] = [];
   private loaded = new Map<string, Loaded>();
-  private gltf = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
+  private gltf: GLTFLoader;
   private spark?: Promise<typeof import("@sparkjsdev/spark")>;
   private time: TimeSelection = { all: true, start: 0, end: 0 };
   private placing?: Loaded;
   onChange?: () => void;
 
-  constructor(private renderer: THREE.WebGLRenderer, private scene: THREE.Scene, private heightAt: (lon: number, lat: number) => number | undefined) {}
+  constructor(private renderer: THREE.WebGLRenderer, private scene: THREE.Scene, private heightAt: (lon: number, lat: number) => number | undefined) {
+    // KTX2 / Basis Universal textures stay compressed in GPU memory (PRD §9.1).
+    const ktx2 = new KTX2Loader().setTranscoderPath(`${BASE}basis/`).detectSupport(renderer);
+    this.gltf = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).setKTX2Loader(ktx2);
+  }
 
   async init(): Promise<void> {
     try {

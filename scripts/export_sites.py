@@ -40,7 +40,9 @@ DOWNLOADS = ROOT / "web" / "public" / "downloads"
 
 FIELDS = ["id", "name", "lon", "lat", "h", "start", "end", "category", "confidence", "precision",
           "view_km", "names", "periods", "country", "conf_identity", "conf_position",
-          "conf_elevation", "conf_time", "has_shapes", "degraded"]
+          "conf_elevation", "conf_time", "has_shapes", "degraded", "source", "qid", "wikipedia"]
+WD_LINKS = ROOT / "data" / "sites" / "wikidata-links.csv"
+WD_SITES = ROOT / "data" / "sites" / "wikidata-sites.json"
 AXES = ("identity", "position", "elevation", "time")
 M_PER_DEG = 111320.0
 
@@ -151,6 +153,10 @@ def stream(path):
 def main():
     countries = Countries()
     heights = TerrainHeights()
+    links = {}
+    if WD_LINKS.exists():
+        with open(WD_LINKS, encoding="utf-8", newline="") as f:
+            links = {r["pleiades"]: r for r in csv.DictReader(f)}
     OUT.mkdir(parents=True, exist_ok=True)
 
     categories, period_ids, period_ranges = [], [], {}
@@ -198,8 +204,34 @@ def main():
             p["elevation"]["ellipsoidal_m"], t["start"], t["end"],
             categories.index(p["category"]), c["overall"], pub, p["view"]["km"],
             "|".join(n for n in p["names"] if n != p["name"])[:300], pids, country,
-            *(c[a]["level"] for a in AXES), int(has), int(degraded),
+            *(c[a]["level"] for a in AXES), int(has), int(degraded), "pleiades",
+            links.get(f["id"].split(":")[1], {}).get("qid", ""),
+            links.get(f["id"].split(":")[1], {}).get("wikipedia", "").rsplit("/", 1)[-1],
         ])
+
+    # Sites only in Wikidata (D2): own provenance; identity 2 (crowd-sourced,
+    # not reviewed), position from Wikidata's coordinate precision, elevation
+    # from the terrain tiles (capped by position), time not entered.
+    wd_count = 0
+    if WD_SITES.exists():
+        if "site" not in categories:
+            categories.append("site")
+        for it in json.loads(WD_SITES.read_text(encoding="utf-8")):
+            lon, lat, prec = it["lon"], it["lat"], it.get("precision_m")
+            pos = 3 if prec is not None and prec <= 1000 else 2 if prec is not None and prec <= 10000 else 1 if prec else 2
+            pub = prec if prec is not None else 10000
+            degraded = prec is None
+            if degraded:
+                lon, lat = degrade(lon, lat, pub)
+            country = countries.of(lon, lat) or "unknown"
+            by_country[country] += 1
+            h = round(heights.sample(lon, lat), 1)
+            levels = [2, pos, min(2, pos), 0]
+            rows.append([it["qid"], it["name"], round(lon, 6), round(lat, 6), h, None, None,
+                         categories.index("site"), min(levels), pub, 20, "", [], country, *levels,
+                         0, int(degraded), "wikidata", it["qid"], it.get("wikipedia", "").rsplit("/", 1)[-1]])
+            wd_count += 1
+    print(f"{len(links)} Pleiades sites linked to Wikidata, {wd_count} sites only in Wikidata")
 
     countries_list = sorted({r[13] for r in rows})
     for r in rows:
@@ -214,7 +246,7 @@ def main():
 
     # Shapes per 1° cell, with terrain heights per vertex.
     cells = defaultdict(list)
-    site_pos = {f"pleiades:{r[0]}": (r[2], r[3]) for r in rows}
+    site_pos = {f"pleiades:{r[0]}": (r[2], r[3]) for r in rows if r[20] == "pleiades"}
     for f in stream(SHAPES):
         p = f["properties"]
         g = f["geometry"]
@@ -266,7 +298,7 @@ def main():
         public = [c for c in reader.fieldnames if c not in ("vertical_precision_m",)]
         out = csv.DictWriter(dst, fieldnames=public, extrasaction="ignore")
         out.writeheader()
-        degraded = {f"pleiades:{r[0]}": (r[2], r[3]) for r in rows if r[19]}
+        degraded = {f"pleiades:{r[0]}": (r[2], r[3]) for r in rows if r[19] and r[20] == "pleiades"}
         for r in reader:
             if r["id"] in degraded:
                 r["lon"], r["lat"] = degraded[r["id"]]

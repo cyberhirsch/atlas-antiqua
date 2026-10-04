@@ -29,6 +29,9 @@ export interface Site {
   country: string;
   hasShapes: boolean;
   degraded: boolean;
+  source: "pleiades" | "wikidata";
+  qid: string;       // Wikidata item, if linked
+  wikipedia: string; // English Wikipedia article title, if any
   pos: Vec3;
 }
 
@@ -196,6 +199,9 @@ export class Sites {
         country: data.countries[r[F.country] as number],
         hasShapes: r[F.has_shapes] === 1,
         degraded: r[F.degraded] === 1,
+        source: (r[F.source] as Site["source"]) ?? "pleiades",
+        qid: (r[F.qid] as string) ?? "",
+        wikipedia: (r[F.wikipedia] as string) ?? "",
         pos: ecef(r[F.lon] as number, r[F.lat] as number, h + 2),
       } satisfies Site;
     });

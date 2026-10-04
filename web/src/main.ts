@@ -74,9 +74,40 @@ function pickGround(x: number, y: number): [number, number, number] | undefined 
   const h = el.clientHeight;
   ray.setFromCamera(new THREE.Vector2((x / w) * 2 - 1, 1 - (y / h) * 2), camera);
   ray.far = Infinity;
-  const hit = ray.intersectObjects(terrain.meshes(), false)[0];
-  if (!hit) return undefined;
-  return geodetic(add(lastOrigin, [hit.point.x, hit.point.y, hit.point.z]));
+  const hit = ray.intersectObjects(terrain.gpuDisplace ? [] : terrain.meshes(), false)[0];
+  if (hit) return geodetic(add(lastOrigin, [hit.point.x, hit.point.y, hit.point.z]));
+  return marchGround(ray.ray.origin, ray.ray.direction);
+}
+
+/**
+ * Ground along a ray (camera-relative) from the loaded heights: steps that
+ * grow with distance, then bisection. Used where meshes cannot be raycast
+ * (GPU-displaced tiles).
+ */
+function marchGround(o: THREE.Vector3, d: THREE.Vector3): [number, number, number] | undefined {
+  const at = (t: number) => geodetic(add(lastOrigin, [o.x + d.x * t, o.y + d.y * t, o.z + d.z * t]));
+  const above = (t: number) => {
+    const [lon, lat, h] = at(t);
+    const g = terrain.heightAt(lon, lat);
+    return g === undefined ? true : h > g;
+  };
+  let prev = 0;
+  let t = 1;
+  while (t < 5e6) {
+    if (!above(t)) {
+      let lo = prev;
+      let hi = t;
+      for (let i = 0; i < 30; i++) {
+        const mid = (lo + hi) / 2;
+        if (above(mid)) lo = mid;
+        else hi = mid;
+      }
+      return at(hi);
+    }
+    prev = t;
+    t = t * 1.05 + 1;
+  }
+  return undefined;
 }
 
 function project(s: Site): [number, number] | undefined {
@@ -122,7 +153,12 @@ function showSite(s: Site): void {
       <dt>Shown from</dt><dd>${s.viewKm === null ? "any distance" : `${s.viewKm} km`}</dd>
     </dl>
     ${scans.length ? `<h4>3D scans</h4><ul class="scans"></ul>` : ""}
-    <a href="https://pleiades.stoa.org/places/${s.id}" target="_blank" rel="noopener">Pleiades record ↗</a>`;
+    <p class="records">${[
+      s.source === "pleiades" ? `<a href="https://pleiades.stoa.org/places/${s.id}" target="_blank" rel="noopener">Pleiades ↗</a>` : "",
+      s.qid ? `<a href="https://www.wikidata.org/wiki/${s.qid}" target="_blank" rel="noopener">Wikidata ↗</a>` : "",
+      s.wikipedia ? `<a href="https://en.wikipedia.org/wiki/${encodeURIComponent(s.wikipedia)}" target="_blank" rel="noopener">Wikipedia ↗</a>` : "",
+    ].filter(Boolean).join(" · ")}</p>
+    <p class="hint">Source: ${s.source === "pleiades" ? "Pleiades (CC BY)" : "Wikidata only (CC0), not yet reviewed against Pleiades"}${s.qid && s.source === "pleiades" ? "; linked to Wikidata" : ""}.</p>`;
   infoBody.querySelector("h3")!.textContent = s.name;
   infoBody.querySelector(".names")!.textContent = s.names.split("|").filter(Boolean).slice(0, 8).join(", ");
   const ul = infoBody.querySelector(".scans");

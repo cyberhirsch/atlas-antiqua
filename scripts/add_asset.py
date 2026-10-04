@@ -2,8 +2,9 @@
 web/public/assets/assets.json with its georeference, dates and licence.
 
 Supported input:
-- glTF/GLB meshes: compressed with gltf-transform (meshopt geometry, WebP
-  textures at most 2048 px)
+- glTF/GLB meshes: compressed with gltf-transform (meshopt geometry,
+  textures at most 2048 px), then textures re-encoded as KTX2 / Basis
+  Universal (web/scripts/ktx2.mjs) so GPU memory holds them compressed
 - Gaussian splats: .ply (3DGS layout) or .spz, copied as they are
 - point clouds: .las/.laz, written as a GLB of coloured points
 
@@ -35,6 +36,7 @@ def optimise_glb(src: Path, dst: Path) -> None:
     cmd = ["npx", "--yes", "@gltf-transform/cli", "optimize", str(src.resolve()), str(dst.resolve()),
            "--compress", "meshopt", "--texture-compress", "webp", "--texture-size", "2048"]
     subprocess.run(cmd, check=True, cwd=ROOT / "web", shell=sys.platform == "win32")
+    subprocess.run(["node", "scripts/ktx2.mjs", str(dst.resolve()), str(dst.resolve())], check=True, cwd=ROOT / "web")
 
 
 def las_to_glb(src: Path, dst: Path) -> None:

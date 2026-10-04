@@ -1,0 +1,35 @@
+# Weekly re-import of Pleiades with a change report (PRD D4).
+# Runs the importer against the latest dump, compares the result with the
+# published site table and attaches the report and the new data. Publishing
+# stays a manual step (scripts/deploy_pages.sh), after review.
+name: Re-import Pleiades
+
+on:
+  schedule:
+    - cron: "0 4 * * 1" # Mondays 04:00 UTC
+  workflow_dispatch:
+
+jobs:
+  reimport:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -r requirements.txt
+      - name: Import (downloads the latest dump; elevation from the Copernicus DEM on AWS)
+        run: python scripts/pleiades.py --refresh
+      - name: Compare with the published sites
+        run: |
+          python scripts/diff_sites.py
+          cat data/sites/changes.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pleiades-import
+          path: |
+            data/sites/changes.md
+            data/sites/pleiades-sites.csv
+            data/sites/ATTRIBUTION.md
+          retention-days: 30

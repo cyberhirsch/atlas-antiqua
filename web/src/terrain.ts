@@ -9,7 +9,7 @@
 // kept in the browser's Cache Storage, and GPU memory has a byte budget.
 
 import * as THREE from "three";
-import { Vec3, dot, ecef, geodetic, length, sub } from "./geo";
+import { Vec3, dot, ecef, enu, geodetic, length, sub } from "./geo";
 
 const BASE = import.meta.env.BASE_URL;
 const TILES_URL = `${BASE}tiles`;
@@ -152,6 +152,14 @@ export class Terrain {
   private view: Vec3 = [0, 0, 1];
   /** Set from the device profile and adapted to the frame rate (quality.ts). */
   quality = { sse: 2.5, imagePx: 512, budgetBytes: 300 * 2 ** 20, meshStep: 1 };
+  /**
+   * GPU displacement (PRD §9.1, ?terrain=gpu): tiles from level 11 share one
+   * grid mesh that the vertex shader raises from a height texture, in the
+   * tile's local frame with second-order curvature terms (error against
+   * exact positions: 2 cm at level 11, 0.3 mm at level 14). Coarser tiles and the sea-floor set use CPU meshes.
+   */
+  gpuDisplace = new URLSearchParams(location.search).get("terrain") === "gpu";
+  private grids = new Map<number, THREE.BufferGeometry>();
   stats = { rendered: 0, loading: 0, maxLevel: 0, gpuMB: 0, hits: 0, downloads: 0, wasted: 0, aborted: 0 };
 
   /** Tile set: "terrain" (sea surface at 0) or "terrain-sea" (ETOPO sea floor, G6). */
@@ -457,9 +465,10 @@ export class Terrain {
     if (t.mesh) {
       if (!t.drawn) this.wasted++;
       this.group.remove(t.mesh);
-      t.mesh.geometry.dispose();
+      if (![...this.grids.values()].includes(t.mesh.geometry)) t.mesh.geometry.dispose();
       const mat = t.mesh.material as THREE.MeshBasicMaterial;
       mat.map?.dispose();
+      (mat.userData.heights as THREE.Texture | undefined)?.dispose();
       mat.dispose();
       this.gpuBytes -= t.bytes;
     }
@@ -508,7 +517,8 @@ export class Terrain {
         for (let c = 0; c < m; c++) grid[r * m + c] = heights[r * step * n + c * step];
       }
     }
-    const geometry = this.geometry(t, grid, m, geoid);
+    const gpu = this.gpuDisplace && t.z >= 11 && !geoid;
+    const geometry = gpu ? this.sharedGrid(m) : this.geometry(t, grid, m, geoid);
     t.heights = heights;
     const map = new THREE.Texture(image);
     map.flipY = false;
@@ -517,7 +527,8 @@ export class Terrain {
     map.generateMipmaps = true;
     map.minFilter = THREE.LinearMipmapLinearFilter;
     map.needsUpdate = true;
-    const mesh = new THREE.Mesh(geometry, this.material(map));
+    const mesh = new THREE.Mesh(geometry, gpu ? this.gpuMaterial(map, t, grid, m) : this.material(map));
+    mesh.frustumCulled = !gpu; // the shared grid's bounds say nothing; tiles are culled above
     mesh.visible = false;
     this.group.add(mesh);
     t.mesh = mesh;
@@ -543,6 +554,103 @@ export class Terrain {
     }
     const geoid = d.length > n * n ? Float32Array.from(d.subarray(n * n), (x) => x / 10) : undefined;
     return { h, geoid };
+  }
+
+  /** Grid of m x m vertices plus skirts, shared by all GPU-displaced tiles. */
+  private sharedGrid(m: number): THREE.BufferGeometry {
+    let g = this.grids.get(m);
+    if (g) return g;
+    const count = m * m + 4 * m;
+    const uv = new Float32Array(count * 2);
+    const skirt = new Float32Array(count);
+    for (let r = 0; r < m; r++) {
+      for (let c = 0; c < m; c++) uv.set([c / (m - 1), r / (m - 1)], 2 * (r * m + c));
+    }
+    const edges = [(i: number) => i, (i: number) => (m - 1) * m + i, (i: number) => i * m, (i: number) => i * m + m - 1];
+    const index: number[] = [];
+    for (let r = 0; r < m - 1; r++) {
+      for (let c = 0; c < m - 1; c++) {
+        const a = r * m + c;
+        index.push(a, a + m, a + 1, a + 1, a + m, a + m + 1);
+      }
+    }
+    edges.forEach((edge, e) => {
+      for (let i = 0; i < m; i++) {
+        const src = edge(i);
+        const dst = m * m + e * m + i;
+        uv.set([uv[2 * src], uv[2 * src + 1]], 2 * dst);
+        skirt[dst] = 1;
+        if (i < m - 1) index.push(src, dst, edge(i + 1), edge(i + 1), dst, dst + 1);
+      }
+    });
+    g = new THREE.BufferGeometry();
+    // Positions are computed in the shader; three.js still needs the attribute.
+    g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(count * 3), 3));
+    g.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
+    g.setAttribute("aSkirt", new THREE.BufferAttribute(skirt, 1));
+    g.setIndex(index);
+    this.grids.set(m, g);
+    return g;
+  }
+
+  /** Material for a GPU-displaced tile: heights as a float texture. */
+  private gpuMaterial(map: THREE.Texture, t: Tile, grid: Float32Array, m: number): THREE.MeshBasicMaterial {
+    const heights = new THREE.DataTexture(grid, m, m, THREE.RedFormat, THREE.FloatType);
+    heights.minFilter = heights.magFilter = THREE.NearestFilter;
+    heights.needsUpdate = true;
+    const lonC = (t.w + t.e) / 2;
+    const latC = (t.s + t.n) / 2;
+    const [e, n, u] = enu(lonC, latC);
+    const phi = (latC * Math.PI) / 180;
+    const e2 = 0.00669437999014;
+    const w = Math.sqrt(1 - e2 * Math.sin(phi) ** 2);
+    const rN = 6378137 / w;                   // prime vertical radius
+    const rM = (6378137 * (1 - e2)) / w ** 3; // meridian radius
+    const deg = Math.PI / 180;
+    // Tile centre at height 0; the mesh is placed at t.center (mid height).
+    const c0 = ecef(lonC, latC, 0);
+    const off = sub(c0, t.center);
+    const uniforms = {
+      uHeights: { value: heights },
+      uE: { value: new THREE.Vector3(...e) },
+      uN: { value: new THREE.Vector3(...n) },
+      uU: { value: new THREE.Vector3(...u) },
+      uOff: { value: new THREE.Vector3(...off) },
+      // metres per unit u (east, at the centre latitude) and per unit v (south)
+      uSpan: { value: new THREE.Vector2((t.e - t.w) * deg * rN * Math.cos(phi), (t.n - t.s) * deg * rM) },
+      uRadii: { value: new THREE.Vector2(rN, rM) },
+      uTanLat: { value: Math.tan(phi) },
+      uTexel: { value: m },
+      uSkirtDepth: { value: Math.max(30, t.error * 4) },
+    };
+    const mat = new THREE.MeshBasicMaterial({ map, side: THREE.DoubleSide });
+    mat.onBeforeCompile = (shader) => {
+      Object.assign(shader.uniforms, uniforms);
+      shader.vertexShader = shader.vertexShader
+        .replace("#include <common>", `#include <common>
+          attribute float aSkirt;
+          uniform sampler2D uHeights;
+          uniform vec3 uE; uniform vec3 uN; uniform vec3 uU; uniform vec3 uOff;
+          uniform vec2 uSpan; uniform vec2 uRadii; uniform float uTanLat;
+          uniform float uTexel; uniform float uSkirtDepth;`)
+        .replace("#include <begin_vertex>", `
+          vec2 tc = uv * (uTexel - 1.0) / uTexel + 0.5 / uTexel;
+          float h = texture2D(uHeights, tc).r - aSkirt * uSkirtDepth;
+          // Ground distances at height 0 from the tile centre; east-west
+          // spacing shrinks with latitude across the tile.
+          float y0 = (0.5 - uv.y) * uSpan.y;
+          float x0 = (uv.x - 0.5) * uSpan.x * (1.0 - uTanLat * y0 / uRadii.y);
+          // Height spreads points apart; latitude circles bend towards the
+          // pole; the surface drops away from the tangent plane. Error
+          // against exact ECEF: 2 cm at level 11, 0.3 mm at level 14.
+          float x = x0 * (1.0 + h / uRadii.x);
+          float y = y0 * (1.0 + h / uRadii.y) + x0 * x0 * uTanLat / (2.0 * uRadii.x);
+          float drop = x0 * x0 / (2.0 * uRadii.x) + y0 * y0 / (2.0 * uRadii.y);
+          vec3 transformed = uOff + uE * x + uN * y + uU * (h - drop);`);
+    };
+    mat.customProgramCacheKey = () => "atlas-terrain-gpu";
+    mat.userData.heights = heights;
+    return mat;
   }
 
   /** Imagery material; with the sea-floor set, ground below sea level is tinted as water. */
