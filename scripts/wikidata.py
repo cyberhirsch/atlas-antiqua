@@ -73,7 +73,9 @@ def sparql(query: str, cache: Path, refresh: bool, attempts: int = 4) -> list[di
             with urllib.request.urlopen(req, timeout=120) as r:
                 rows = [{k: v["value"] for k, v in b.items()} for b in json.load(r)["results"]["bindings"]]
             cache.parent.mkdir(parents=True, exist_ok=True)
-            cache.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
+            tmp = cache.with_suffix(".tmp")
+            tmp.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(cache)  # never leave a half-written cache file
             time.sleep(1)  # be polite to the public endpoint
             return rows
         except Exception as e:  # noqa: BLE001 - retried, then reported
@@ -89,6 +91,15 @@ def fold(s: str) -> str:
 
 def similarity(a: str, b: str) -> float:
     return difflib.SequenceMatcher(None, fold(a), fold(b)).ratio()
+
+
+def auto_decision(wd_name: str, pl_name: str, distance: float, sim: float) -> str:
+    """First-pass review rules; manual decisions in merge-review.csv win."""
+    if (fold(wd_name) == fold(pl_name) and distance <= 5000) or (distance <= 500 and sim >= 0.65):
+        return "same (auto: name equal within 5 km, or <= 500 m and similarity >= 0.65)"
+    if sim < 0.55 and distance > 300:
+        return "different (auto: similarity < 0.55 and > 300 m apart)"
+    return ""
 
 
 def metres(lon1, lat1, lon2, lat2) -> float:
@@ -142,6 +153,10 @@ def main():
         """Rows for one tile; a tile that times out is split into four."""
         name = f"sites_{w}_{s}.json" if size == 5 else f"sites_{w}_{s}_{size}.json"
         q = Q_SITES.format(w=w, s=s, e=w + size, n=s + size, langs=LANGS)
+        marker = CACHE / (name + ".split")
+        if marker.exists() and not args.refresh:
+            half = size / 2  # split before: go straight to the cached quarters
+            return [r for dw in (0, half) for ds in (0, half) for r in tile_rows(w + dw, s + ds, half)]
         try:
             return sparql(q, CACHE / name, args.refresh, attempts=2 if size > MIN_TILE else 3)
         except RuntimeError:
@@ -153,6 +168,7 @@ def main():
                 return []
             half = size / 2
             print(f"  splitting {w},{s} ({size}°)")
+            marker.write_text("", encoding="utf-8")
             return [r for dw in (0, half) for ds in (0, half) for r in tile_rows(w + dw, s + ds, half)]
 
     for w in range(w0, e0, 5):
@@ -169,8 +185,17 @@ def main():
                                        "precision_m": round(float(row["precision"]) * 111320) if row.get("precision") else None})
     print(f"  {len(items)} items")
 
+    # Decisions from an earlier review (merge-review.csv, column "decision":
+    # "same ..." or "different ..."); kept across runs.
+    decided = {}
+    if (OUT / "merge-review.csv").exists():
+        with open(OUT / "merge-review.csv", encoding="utf-8", newline="") as f:
+            # Only manual decisions are carried over; auto ones are recomputed.
+            decided = {(r["qid"], r["pleiades"]): r["decision"] for r in csv.DictReader(f)
+                       if r.get("decision") and "(auto" not in r["decision"] and "(rule" not in r["decision"]}
+
     linked_qids = {l["qid"] for l in links.values()}
-    review, new = [], []
+    review, new, duplicates = [], [], []
     for it in items.values():
         if it["qid"] in linked_qids or it["name"] == it["qid"]:
             continue
@@ -180,10 +205,20 @@ def main():
             links[best[2]] = {"pleiades": best[2], "qid": it["qid"], "wikipedia": it["wikipedia"], "image": "",
                               "rule": f"distance {best[1]:.0f} m, name similarity {best[0]:.2f}"}
         elif best and ((best[1] <= 1000 and best[0] >= 0.5) or best[0] >= 0.9):
+            decision = decided.get((it["qid"], best[2]), "") or auto_decision(it["name"], sites[best[2]][0], best[1], best[0])
+            if decision.startswith("same"):
+                if best[2] not in links:
+                    links[best[2]] = {"pleiades": best[2], "qid": it["qid"], "wikipedia": it["wikipedia"], "image": "",
+                                      "rule": f"review: {decision}"}
+                else:
+                    # A second Wikidata item for a site already linked: a
+                    # duplicate within Wikidata, not a new site.
+                    duplicates.append({"qid": it["qid"], "pleiades": best[2], "rule": decision})
+                continue
             review.append({"qid": it["qid"], "wikidata_name": it["name"], "pleiades": best[2],
                            "pleiades_name": sites[best[2]][0], "distance_m": round(best[1]),
-                           "similarity": round(best[0], 2), "decision": ""})
-            new.append(it)  # kept separate until reviewed
+                           "similarity": round(best[0], 2), "decision": decision})
+            new.append(it)  # separate until reviewed as the same site
         else:
             new.append(it)
 
@@ -197,6 +232,12 @@ def main():
         out.writerows(review)
     (OUT / "wikidata-sites.json").write_text(json.dumps(new, ensure_ascii=False), encoding="utf-8")
     (OUT / "wikidata-uncovered.json").write_text(json.dumps(uncovered), encoding="utf-8")
+    with open(OUT / "wikidata-duplicates.csv", "w", encoding="utf-8", newline="") as f:
+        out = csv.DictWriter(f, fieldnames=["qid", "pleiades", "rule"])
+        out.writeheader()
+        out.writerows(duplicates)
+    open_pairs = sum(1 for r in review if not r["decision"])
+    print(f"{len(duplicates)} Wikidata duplicates of linked sites dropped; {open_pairs} pairs still need a person")
     print(f"{len(links)} Pleiades sites linked, {len(review)} pairs to review, {len(new)} sites only in Wikidata")
     if uncovered:
         print(f"{len(uncovered)} tiles could not be queried (listed in wikidata-uncovered.json)")
