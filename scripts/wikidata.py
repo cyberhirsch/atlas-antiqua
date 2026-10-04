@@ -206,7 +206,12 @@ def main():
                               "rule": f"distance {best[1]:.0f} m, name similarity {best[0]:.2f}"}
         elif best and ((best[1] <= 1000 and best[0] >= 0.5) or best[0] >= 0.9):
             decision = decided.get((it["qid"], best[2]), "") or auto_decision(it["name"], sites[best[2]][0], best[1], best[0])
+            pair = {"qid": it["qid"], "wikidata_name": it["name"], "pleiades": best[2],
+                    "pleiades_name": sites[best[2]][0], "distance_m": round(best[1]),
+                    "similarity": round(best[0], 2), "decision": decision}
             if decision.startswith("same"):
+                # Kept in the review file with its decision, so it survives reruns.
+                review.append(pair)
                 if best[2] not in links:
                     links[best[2]] = {"pleiades": best[2], "qid": it["qid"], "wikipedia": it["wikipedia"], "image": "",
                                       "rule": f"review: {decision}"}
@@ -215,9 +220,7 @@ def main():
                     # duplicate within Wikidata, not a new site.
                     duplicates.append({"qid": it["qid"], "pleiades": best[2], "rule": decision})
                 continue
-            review.append({"qid": it["qid"], "wikidata_name": it["name"], "pleiades": best[2],
-                           "pleiades_name": sites[best[2]][0], "distance_m": round(best[1]),
-                           "similarity": round(best[0], 2), "decision": decision})
+            review.append(pair)
             new.append(it)  # separate until reviewed as the same site
         else:
             new.append(it)
