@@ -351,8 +351,9 @@ and current availability still need checking for each.
 | | Shipwreck databases | dated underwater sites |
 | | Georeferenced historical maps (e.g. David Rumsey) | old surveys showing features since destroyed |
 
-Licence compatibility is a release blocker: an ODbL source may force the
-merged database under ODbL. Decide the target licence in M0.
+Licence: the merged database is published under ODbL 1.0 (decided 2026-10-04,
+§14.1), which covers the OpenStreetMap-derived geometry; every source keeps its
+attribution.
 
 ## 9. Technical direction
 
@@ -500,7 +501,7 @@ See [ROADMAP.md](ROADMAP.md). In short:
 
 ## 14. Open questions
 
-1. Target licence of the merged dataset (CC BY, ODbL, CC0)?
+1. ~~Target licence of the merged dataset (CC BY, ODbL, CC0)?~~ **Decided 2026-10-04: ODbL 1.0** for the merged data set, so OpenStreetMap-derived geometry can stay in. Source attributions (Pleiades CC BY, Copernicus, NOAA, EOX, Bavarian survey office) are kept; Wikidata is CC0. The code is MIT.
 2. Who may contribute data, and who reviews it?
 3. Static site with periodic builds, or a live back end from the start?
 4. Which region first: Bavaria (BLfD), the Mediterranean (Pleiades), or global
@@ -523,6 +524,5 @@ requirement in §7 has a first implementation in the test viewer, except:
 - **Large scans as 3D Tiles** and the cluster LOD tree (§9.1): scans use a
   simple LOD chain for now; the comparison belongs to the XR spike.
 
-Data decisions that stay with the owner: target licence of the merged set
-(§14.1), contribution and review rules (§14.2), student scan publishing
+Data decisions that stay with the owner: contribution and review rules (§14.2), student scan publishing
 (§14.5), and the review of `data/sites/merge-review.csv` (D2).

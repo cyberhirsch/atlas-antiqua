@@ -980,6 +980,9 @@ def write(sites, shapes, meta):
             f.write(f"- **{src['name']}** ({src['url']}): {src['licence']}. {src['attribution']}\n")
         f.write("- Sites and shapes with `odbl: true` contain geometry from OpenStreetMap "
                 "(c) OpenStreetMap contributors, ODbL 1.0.\n")
+        f.write("\nThe merged Atlas Antiqua data set is published under the Open Database "
+                "License (ODbL 1.0): https://opendatacommons.org/licenses/odbl/1-0/ . "
+                "Wikidata content is CC0.\n")
 
 
 def main():

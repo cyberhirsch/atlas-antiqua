@@ -14,7 +14,7 @@ Status as of 2026-10-04. Live test viewer: https://cyberhirsch.github.io/atlas-a
       axis with rules, provenance and licence per field
 - [ ] Check licences of the first data sources (Pleiades, Wikidata, Copernicus,
       ETOPO, EOX, Bavarian open data are recorded; review before a release)
-- [ ] Target licence of the merged data set (PRD §14.1); the code is MIT
+- [x] Target licence of the merged data set: ODbL 1.0 (PRD §14.1); the code is MIT
 
 ## M1: Globe with points
 
