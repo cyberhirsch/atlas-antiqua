@@ -193,8 +193,9 @@ def main():
             i = period_ids.index(per["id"])
             if i not in pids:
                 pids.append(i)
-            lo, hi = period_ranges.get(per["id"], (per["earliest"], per["latest"]))
-            period_ranges[per["id"]] = (min(lo, per["earliest"]), max(hi, per["latest"]))
+            if per["earliest"] is not None:  # unknown ranges stay out of the period list
+                lo, hi = period_ranges.get(per["id"], (per["earliest"], per["latest"]))
+                period_ranges[per["id"]] = (min(lo, per["earliest"]), max(hi, per["latest"]))
             by_period[per["id"]] += 1
         country = countries.of(lon, lat) or "unknown"
         by_country[country] += 1
@@ -240,7 +241,9 @@ def main():
     for r in rows:
         r[13] = countries_list.index(r[13])
     periods = [{"id": pid, "start": period_ranges[pid][0], "end": period_ranges[pid][1],
-                "label": pid.replace("-", " ")} for pid in period_ids]
+                "label": pid.replace("-", " ")} if pid in period_ranges else
+               {"id": pid, "start": None, "end": None, "label": f"{pid.replace('-', ' ')} (range unknown)"}
+               for pid in period_ids]
     with open(OUT / "sites.json", "w", encoding="utf-8") as f:
         json.dump({"fields": FIELDS, "categories": categories, "countries": countries_list,
                    "periods": periods, "rows": rows}, f, ensure_ascii=False, separators=(",", ":"))
@@ -290,7 +293,7 @@ def main():
         "sites": len(rows),
         "by_country": dict(by_country.most_common()),
         "by_period": [{"id": pid, "start": period_ranges[pid][0], "end": period_ranges[pid][1],
-                       "sites": by_period[pid]} for pid in sorted(period_ids, key=lambda i: period_ranges[i])],
+                       "sites": by_period[pid]} for pid in sorted(period_ranges, key=lambda i: period_ranges[i])],
         "dated": sum(1 for r in rows if r[5] is not None),
         "with_elevation": sum(1 for r in rows if r[4] is not None),
         "with_shapes": len(with_shapes),

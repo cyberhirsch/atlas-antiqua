@@ -107,7 +107,7 @@ export class Timeline {
     const keep = this.periodSel.value;
     const list = this.periods
       .map((p, i) => ({ p, i }))
-      .filter(({ i, p }) => ids.has(i) || p.id === keep)
+      .filter(({ i, p }) => p.start !== null && (ids.has(i) || p.id === keep))
       .sort((a, b) => a.p.start - b.p.start || a.p.end - b.p.end);
     const html = ['<option value="">Any period</option>'];
     for (const { p } of list) {
