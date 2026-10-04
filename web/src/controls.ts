@@ -2,7 +2,7 @@
 // right drag (or shift + left drag) turns and tilts, the wheel zooms
 // towards the target, middle drag looks around from where the camera
 // stands. Keys: W/S forward and back, A/D sideways, Q/E turn,
-// R/F zoom in and out; speed scales with the distance to the ground.
+// R/F zoom in and out; on touch screens two fingers pinch, twist and tilt; speed scales with the distance to the ground.
 // State is kept in double precision.
 
 import * as THREE from "three";
@@ -27,17 +27,36 @@ export class GlobeControls {
   private drag?: { x: number; y: number; mode: "pan" | "orbit" | "look"; moved: number };
   onClick?: (x: number, y: number) => void;
   private keys = new Set<string>();
+  private touches = new Map<number, { x: number; y: number }>();
+  private gesture?: { dist: number; angle: number; midY: number };
   private lastFrame = 0;
 
   constructor(private el: HTMLElement, private camera: THREE.PerspectiveCamera) {
     el.addEventListener("pointerdown", (e) => {
       el.setPointerCapture(e.pointerId);
+      this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (this.touches.size === 2) {
+        // Two fingers: pinch zooms, twist turns, moving both up or down tilts.
+        this.drag = undefined;
+        this.flight = undefined;
+        this.gesture = this.twoFinger();
+        return;
+      }
       if (e.button === 1) e.preventDefault(); // no autoscroll
       const mode = e.button === 1 ? "look" : e.button === 2 || e.shiftKey ? "orbit" : "pan";
       this.drag = { x: e.clientX, y: e.clientY, mode, moved: 0 };
       this.flight = undefined;
     });
     el.addEventListener("pointermove", (e) => {
+      if (this.touches.has(e.pointerId)) this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (this.gesture && this.touches.size === 2) {
+        const g = this.twoFinger();
+        this.range = Math.min(4e7, Math.max(30, this.range * (this.gesture.dist / Math.max(g.dist, 1))));
+        this.heading -= g.angle - this.gesture.angle;
+        this.pitch = Math.min(-0.05, Math.max(-Math.PI / 2, this.pitch + (g.midY - this.gesture.midY) * 0.005));
+        this.gesture = g;
+        return;
+      }
       if (!this.drag) return;
       const dx = e.clientX - this.drag.x;
       const dy = e.clientY - this.drag.y;
@@ -53,10 +72,18 @@ export class GlobeControls {
         this.pan(dx, dy);
       }
     });
-    el.addEventListener("pointerup", (e) => {
-      if (this.drag && this.drag.moved < 4) this.onClick?.(e.clientX, e.clientY);
+    const release = (e: PointerEvent) => {
+      this.touches.delete(e.pointerId);
+      if (this.gesture) {
+        if (this.touches.size < 2) this.gesture = undefined;
+        this.drag = undefined;
+        return;
+      }
+      if (e.type === "pointerup" && this.drag && this.drag.moved < 4) this.onClick?.(e.clientX, e.clientY);
       this.drag = undefined;
-    });
+    };
+    el.addEventListener("pointerup", release);
+    el.addEventListener("pointercancel", release);
     el.addEventListener("contextmenu", (e) => e.preventDefault());
     window.addEventListener("keydown", (e) => {
       if (e.target instanceof HTMLInputElement || e.ctrlKey || e.metaKey || e.altKey) return;
@@ -78,6 +105,11 @@ export class GlobeControls {
       },
       { passive: false },
     );
+  }
+
+  private twoFinger(): { dist: number; angle: number; midY: number } {
+    const [a, b] = [...this.touches.values()];
+    return { dist: Math.hypot(b.x - a.x, b.y - a.y), angle: Math.atan2(b.y - a.y, b.x - a.x), midY: (a.y + b.y) / 2 };
   }
 
   /**

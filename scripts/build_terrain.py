@@ -122,12 +122,13 @@ def read_window(ds, lons, lats, step_deg):
 # --- sources -------------------------------------------------------------------
 
 class Etopo:
-    def __init__(self):
+    def __init__(self, sea_floor=False):
         self.ds = rasterio.open(ETOPO)
+        self.sea_floor = sea_floor
 
     def sample(self, lons, lats, step):
-        h = read_window(self.ds, lons, lats, step)
-        return np.maximum(np.nan_to_num(h, nan=0.0), 0.0)  # sea surface at 0
+        h = np.nan_to_num(read_window(self.ds, lons, lats, step), nan=0.0)
+        return h if self.sea_floor else np.maximum(h, 0.0)  # else the sea surface at 0
 
 
 class Glo30:
@@ -297,19 +298,29 @@ def build_tile(z, x, y, etopo, glo, dgm, max_global):
     if z > 0 and glo.intersects(w, s, e, n):
         g = glo.sample(lons, lats, step_deg)
         wg = glo.weight(lons, lats) * ~np.isnan(g)
+        if etopo.sea_floor:
+            wg = wg * (g != 0.0)  # GLO-30 has no sea floor: keep ETOPO's there
         h = np.where(wg > 0, np.nan_to_num(g) * wg + h * (1 - wg), h)
     if dgm.intersects(w, s, e, n):
         step_m = step_deg * 111320 * math.cos(math.radians((s + n) / 2))
         d, wd = dgm.sample(lons, lats, step_m)
         wd = wd * ~np.isnan(d)
         h = np.where(wd > 0, np.nan_to_num(d) * wd + h * (1 - wd), h)
-    h = h + geoid_undulation(lons, lats)
+    n_geoid = geoid_undulation(lons, lats)
+    h = h + n_geoid
     path = OUT / str(z) / str(x) / f"{y}.hgt"
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     if not np.isfinite(h).all():
         raise RuntimeError(f"tile {z}/{x}/{y} has non-finite heights")
-    tmp.write_bytes(encode(h))
+    data = encode(h)
+    if etopo.sea_floor:
+        # Append the geoid heights (9 x 9, decimetres) so the viewer can tell
+        # sea level (EGM2008 height 0) apart from the ellipsoid.
+        idx = np.linspace(0, N - 1, 9).round().astype(int)
+        data = gzip.compress(gzip.decompress(data) + np.round(n_geoid[np.ix_(idx, idx)] * 10).astype("<i4").tobytes(),
+                             compresslevel=9, mtime=0)
+    tmp.write_bytes(data)
     tmp.replace(path)  # never leave a half-written tile
 
 
@@ -332,9 +343,14 @@ def refine(z, x, y, glo, dgm, max_global):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--max-global", type=int, default=5)
+    parser.add_argument("--sea-floor", action="store_true",
+                        help="keep ETOPO's sea floor (written to tiles/terrain-sea, with geoid heights)")
     args = parser.parse_args()
 
-    etopo, glo, dgm = Etopo(), Glo30(), Dgm1()
+    global OUT
+    if args.sea_floor:
+        OUT = OUT.parent / "terrain-sea"
+    etopo, glo, dgm = Etopo(args.sea_floor), Glo30(), Dgm1()
     regions = {
         "scheme": "WGS84 quadtree, level z has 2^(z+1) x 2^z tiles; x from 180W, y from 90N",
         "samples": N,

@@ -1,9 +1,18 @@
 import * as THREE from "three";
+import { Assets } from "./assets";
+import { Clusters } from "./clusters";
 import { GlobeControls, View } from "./controls";
-import { Vec3, dot, ecef, enu, geodetic, length, sub, yearLabel } from "./geo";
-import { CATEGORY_COLORS, Site, Sites } from "./sites";
+import { Vec3, add, dot, enu, geodetic, length, sub, yearLabel } from "./geo";
+import { Map2D } from "./map2d";
 import { AdaptiveQuality, Device, Profile, detectDevice, pickProfile } from "./quality";
+import { Search } from "./search";
+import { Shapes } from "./shapes";
+import { CATEGORY_COLORS, Filters, Site, Sites } from "./sites";
 import { Terrain } from "./terrain";
+import { Timeline } from "./timeline";
+import { Tools } from "./tools";
+import * as Url from "./urlstate";
+import { Xr, XrMode } from "./xr";
 
 const PLACES: { name: string; note: string; view: View }[] = [
   { name: "Traunstein – Ruhpolding", note: "LiDAR 1 m", view: { lon: 12.645, lat: 47.80, range: 9000, heading: 0.3, pitch: -0.55 } },
@@ -13,10 +22,14 @@ const PLACES: { name: string; note: string; view: View }[] = [
   { name: "Knossos, Crete", note: "GLO-30", view: { lon: 25.1631, lat: 35.298, range: 6000, heading: 0, pitch: -0.6 } },
   { name: "Crete", note: "GLO-30", view: { lon: 24.9, lat: 35.0, range: 160000, heading: 0, pitch: -0.9 } },
   { name: "Giza", note: "GLO-30", view: { lon: 31.1342, lat: 29.9792, range: 6000, heading: 0.8, pitch: -0.6 } },
+  { name: "Skaptopara (3D scan)", note: "GLO-30", view: { lon: 23.0525, lat: 41.9957, range: 400, heading: 0.4, pitch: -0.6 } },
   { name: "Whole Earth", note: "", view: { lon: 15, lat: 38, range: 2.2e7, heading: 0, pitch: -Math.PI / 2 } },
 ];
 
-const el = document.getElementById("view")!;
+const BASE = import.meta.env.BASE_URL;
+const $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
+
+const el = $("#view");
 // The renderer is created after device detection, which picks antialiasing
 // and resolution (quality.ts).
 const device: Device = await detectDevice();
@@ -29,11 +42,15 @@ renderer.setClearColor(0x050608);
 el.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
+const world = new THREE.Group(); // everything placed on the Earth; scaled in XR table modes
+scene.add(world);
 const camera = new THREE.PerspectiveCamera(50, 1, 0.5, 2e8);
 const controls = new GlobeControls(renderer.domElement, camera);
 const terrain = new Terrain();
 const sites = new Sites();
-scene.add(terrain.group, sites.group);
+const shapes = new Shapes();
+const assets = new Assets(renderer, scene, (lon, lat) => terrain.heightAt(lon, lat));
+world.add(terrain.group, shapes.group, sites.group, assets.group);
 
 function resize(): void {
   const w = el.clientWidth;
@@ -45,94 +62,174 @@ function resize(): void {
 window.addEventListener("resize", resize);
 resize();
 
-// --- ground height under the target and under the camera -------------------
+// --- picking ---------------------------------------------------------------
 
+let lastCam: Vec3 = [0, 0, 0];
+let lastOrigin: Vec3 = [0, 0, 0];
 const ray = new THREE.Raycaster();
-function groundHeight(lon: number, lat: number, cam: Vec3): number | undefined {
-  const up = enu(lon, lat)[2];
-  const top = ecef(lon, lat, 12000);
-  const origin = sub(top, cam);
-  ray.set(new THREE.Vector3(...origin), new THREE.Vector3(-up[0], -up[1], -up[2]));
-  ray.far = 25000;
+
+/** Ground point under a screen position: lon, lat, height (ellipsoidal). */
+function pickGround(x: number, y: number): [number, number, number] | undefined {
+  const w = el.clientWidth;
+  const h = el.clientHeight;
+  ray.setFromCamera(new THREE.Vector2((x / w) * 2 - 1, 1 - (y / h) * 2), camera);
+  ray.far = Infinity;
   const hit = ray.intersectObjects(terrain.meshes(), false)[0];
   if (!hit) return undefined;
-  return 12000 - hit.distance;
+  return geodetic(add(lastOrigin, [hit.point.x, hit.point.y, hit.point.z]));
 }
 
-// --- UI ------------------------------------------------------------------------
+function project(s: Site): [number, number] | undefined {
+  if (!sites.shown(s, lastCam)) return undefined;
+  const rel = sub(s.pos, lastCam);
+  const v = new THREE.Vector3(rel[0], rel[1], rel[2]).project(camera);
+  if (v.z > 1) return undefined;
+  return [((v.x + 1) / 2) * el.clientWidth, ((1 - v.y) / 2) * el.clientHeight];
+}
 
-const list = document.getElementById("place-list")!;
+// --- UI --------------------------------------------------------------------
+
+const info = $("#info");
+const infoBody = $("#info-body");
+$("#info-close").onclick = () => {
+  info.hidden = true;
+  urlSite = undefined;
+  saveUrl();
+};
+let urlSite: string | undefined;
+
+function flyToSite(s: Site): void {
+  controls.flyTo({ lon: s.lon, lat: s.lat, range: s.viewKm === null ? 8000 : Math.min(s.viewKm * 400, 8000), heading: controls.heading, pitch: -0.7 });
+  showSite(s);
+}
+
+function showSite(s: Site): void {
+  urlSite = s.id;
+  saveUrl();
+  const dates = s.start === null ? "not entered" : `${s.start} – ${s.end} HE<br><small>${yearLabel(s.start)} – ${yearLabel(s.end!)}</small>`;
+  const axes = ["identity", "position", "elevation", "time"];
+  const scans = assets.forSite(s.id);
+  infoBody.innerHTML = `
+    <h3></h3>
+    <p class="hint names"></p>
+    <dl>
+      <dt>Category</dt><dd>${s.category}</dd>
+      <dt>Country</dt><dd>${s.country}</dd>
+      <dt>Dates</dt><dd>${dates}</dd>
+      <dt>Elevation</dt><dd>${s.h ? `${s.h.toFixed(0)} m (ellipsoid)` : "unknown"}</dd>
+      <dt>Confidence</dt><dd>${s.confidence} of 5 overall<br><small>${axes.map((a, i) => `${a} ${s.conf[i]}`).join(" · ")}</small></dd>
+      <dt>Precision</dt><dd>${s.precision ? `${s.precision} m` : "unknown"}${s.degraded ? "<br><small>Public position reduced to this precision (sensitive or unknown accuracy).</small>" : ""}</dd>
+      <dt>Shown from</dt><dd>${s.viewKm === null ? "any distance" : `${s.viewKm} km`}</dd>
+    </dl>
+    ${scans.length ? `<h4>3D scans</h4><ul class="scans"></ul>` : ""}
+    <a href="https://pleiades.stoa.org/places/${s.id}" target="_blank" rel="noopener">Pleiades record ↗</a>`;
+  infoBody.querySelector("h3")!.textContent = s.name;
+  infoBody.querySelector(".names")!.textContent = s.names.split("|").filter(Boolean).slice(0, 8).join(", ");
+  const ul = infoBody.querySelector(".scans");
+  for (const a of scans) {
+    const li = document.createElement("li");
+    li.innerHTML = `<label class="check"><input type="checkbox"> <span></span></label><small></small>
+      <div class="row"><button data-a="go">Go there</button><button data-a="place">Place…</button></div>`;
+    li.querySelector("span")!.textContent = a.name;
+    li.querySelector("small")!.textContent = assets.describe(a) + (a.note ? ` — ${a.note}` : "");
+    const box = li.querySelector("input")!;
+    box.checked = !assets.isHidden(a.id);
+    // Phase toggle (A5): switch scans of the same site on and off.
+    box.onchange = () => assets.setHidden(a.id, !box.checked);
+    li.querySelector<HTMLButtonElement>('[data-a="go"]')!.onclick = () =>
+      controls.flyTo({ lon: a.lon, lat: a.lat, range: 250, heading: controls.heading, pitch: -0.6 });
+    li.querySelector<HTMLButtonElement>('[data-a="place"]')!.onclick = () => li.appendChild(assets.placementPanel(a.id));
+    ul!.appendChild(li);
+  }
+  info.hidden = false;
+}
+
+controls.onClick = (x, y) => {
+  if (tools.active !== "none") return;
+  const r = renderer.domElement.getBoundingClientRect();
+  const s = sites.pick(x - r.left, y - r.top, camera, lastCam, r.width, r.height);
+  if (s) showSite(s);
+};
+
+const placeList = $("#place-list");
 for (const p of PLACES) {
   const li = document.createElement("li");
   const b = document.createElement("button");
   b.innerHTML = `${p.name}${p.note ? `<small>${p.note}</small>` : ""}`;
   b.onclick = () => controls.flyTo(p.view);
   li.appendChild(b);
-  list.appendChild(li);
+  placeList.appendChild(li);
 }
 
-const yearInput = document.getElementById("year") as HTMLInputElement;
-const allInput = document.getElementById("all-dates") as HTMLInputElement;
-const yearOut = document.getElementById("year-label")!;
-function updateTime(): void {
-  const y = Number(yearInput.value);
-  yearOut.textContent = allInput.checked ? "all dates" : `${y} HE · ${yearLabel(y)}`;
-  yearInput.disabled = allInput.checked;
-  sites.setTime(y, allInput.checked);
-}
-yearInput.addEventListener("input", updateTime);
-allInput.addEventListener("change", updateTime);
-
-const info = document.getElementById("info")!;
-const infoBody = document.getElementById("info-body")!;
-document.getElementById("info-close")!.onclick = () => (info.hidden = true);
-
-function showSite(s: Site): void {
-  const dates = s.start === null ? "not entered" : `${s.start} – ${s.end} HE<br><small>${yearLabel(s.start)} – ${yearLabel(s.end!)}</small>`;
-  infoBody.innerHTML = `
-    <h3></h3>
-    <dl>
-      <dt>Category</dt><dd>${s.category}</dd>
-      <dt>Dates</dt><dd>${dates}</dd>
-      <dt>Elevation</dt><dd>${s.h ? `${s.h.toFixed(0)} m (ellipsoid)` : "unknown"}</dd>
-      <dt>Confidence</dt><dd>${s.confidence} of 5</dd>
-      <dt>Precision</dt><dd>${s.precision ? `${s.precision} m` : "unknown"}</dd>
-      <dt>Shown from</dt><dd>${s.viewKm === null ? "any distance" : `${s.viewKm} km`}</dd>
-    </dl>
-    <a href="https://pleiades.stoa.org/places/${s.id}" target="_blank" rel="noopener">Pleiades record ↗</a>`;
-  infoBody.querySelector("h3")!.textContent = s.name;
-  info.hidden = false;
+// Filters (S2, D8).
+const filters: Filters = { hiddenCategories: new Set(), country: null, minConf: [0, 0, 0, 0], onlyShapes: false, onlyAssets: false };
+function applyFilters(): void {
+  sites.setFilters(filters);
+  map2d.refresh();
+  saveUrl();
 }
 
-controls.onClick = (x, y) => {
-  const r = renderer.domElement.getBoundingClientRect();
-  const s = sites.pick(x - r.left, y - r.top, camera, lastCam, r.width, r.height);
-  if (s) showSite(s);
+const tools = new Tools(document.body, renderer.domElement, sites, pickGround, (lon, lat) => terrain.heightAt(lon, lat), project);
+world.add(tools.group);
+const clusters = new Clusters(document.body);
+clusters.onPick = (lon, lat, range) => controls.flyTo({ lon, lat, range, heading: controls.heading, pitch: controls.pitch });
+const map2d = new Map2D($("#map2d"), sites);
+map2d.onPick = (s) => showSite(s);
+
+let timeline: Timeline;
+function saveUrl(): void {
+  if (!timeline) return;
+  Url.write({ view: controls.view(), time: timeline.state, filters, site: urlSite });
+}
+
+// --- XR (X1-X6) --------------------------------------------------------------
+
+const xrOverlay = $("#xr-overlay");
+const xr = new Xr(renderer, world, xrOverlay);
+xr.heightAt = (lon, lat) => terrain.heightAt(lon, lat);
+xr.pickGround = (r) => {
+  ray.set(r.origin, r.direction);
+  ray.far = 5000;
+  const hit = ray.intersectObjects(terrain.meshes(), false)[0];
+  return hit ? geodetic(add(lastOrigin, [hit.point.x, hit.point.y, hit.point.z])) : undefined;
 };
+xr.onEnd = () => {
+  terrain.visible = true;
+  resize();
+};
+
+function showXr(d: Device): void {
+  const box = $("#xr");
+  const modes: [XrMode, string][] = [];
+  if (d.vr) modes.push(["vr", "Enter VR"], ["vr-table", "VR table"]);
+  if (d.ar) modes.push(["ar", "AR on site"], ["ar-table", "AR tabletop"]);
+  if (!modes.length) return;
+  box.hidden = false;
+  for (const [mode, label] of modes) {
+    const b = document.createElement("button");
+    b.textContent = label;
+    // XR sessions can only start from a user tap.
+    b.onclick = () => {
+      const h = terrain.heightAt(controls.lon, controls.lat) ?? controls.h;
+      xr.enter(mode, { lon: controls.lon, lat: controls.lat, h, heading: controls.heading })
+        .catch((err) => alert(`Could not start ${label}: ${(err as Error).message}`));
+    };
+    box.appendChild(b);
+  }
+}
 
 // --- main loop ---------------------------------------------------------------
 
-let lastCam: Vec3 = [0, 0, 0];
-const stats = document.getElementById("stats")!;
+const stats = $("#stats");
 let frame = 0;
 
-function tick(now: number): void {
-  adaptive.frame(now);
-  terrain.quality.sse = adaptive.sse;
-  const ratio = basePixelRatio * adaptive.scale;
-  if (Math.abs(renderer.getPixelRatio() - ratio) > 0.01) {
-    renderer.setPixelRatio(ratio);
-    resize();
-  }
-  const cam = controls.update(now);
-  lastCam = cam;
+function placeCamera(cam: Vec3): void {
   const target = controls.target();
-  const [, , up] = enu(controls.lon, controls.lat);
+  const [east, north, up] = enu(controls.lon, controls.lat);
   camera.position.set(0, 0, 0);
   // Camera up lies in the vertical plane of the heading, at right angles to
   // the view. Straight down this is the heading direction (north at load);
   // using the local vertical there would leave the roll undefined.
-  const [east, north] = enu(controls.lon, controls.lat);
   const sh = Math.sin(controls.heading);
   const ch = Math.cos(controls.heading);
   const sp = Math.sin(controls.pitch);
@@ -146,44 +243,75 @@ function tick(now: number): void {
   camera.lookAt(t[0], t[1], t[2]);
   // Near plane follows the height above ground so close views stay sharp.
   const camHeight = geodetic(cam)[2] - controls.h;
-  camera.near = Math.max(0.5, Math.min(camHeight, controls.range) * 0.05);
+  camera.near = Math.max(0.1, Math.min(camHeight, controls.range) * 0.05);
   camera.far = Math.max(1e5, length(cam) * 2);
   camera.updateProjectionMatrix();
   camera.updateMatrixWorld();
+}
 
-  terrain.update(camera, cam, el.clientHeight);
-  sites.update(cam);
-  renderer.render(scene, camera);
+function tick(now: number, xrFrame?: XRFrame): void {
+  adaptive.frame(now);
+  terrain.quality.sse = adaptive.sse;
+  timeline?.tick(now);
+  if (map2d.active) return;
 
-  if (++frame % 10 === 0) {
-    const g = groundHeight(controls.lon, controls.lat, cam);
+  let cam: Vec3;
+  let origin: Vec3;
+  let view: THREE.PerspectiveCamera = camera;
+  if (xr.mode) {
+    xr.poll(now);
+    const xrCam = renderer.xr.getCamera();
+    const f = xr.frame(xrCam, xrFrame);
+    cam = f.cam;
+    origin = f.origin;
+    terrain.visible = f.showTerrain;
+    view = xrCam;
+  } else {
+    const ratio = basePixelRatio * adaptive.scale;
+    if (Math.abs(renderer.getPixelRatio() - ratio) > 0.01) {
+      renderer.setPixelRatio(ratio);
+      resize();
+    }
+    cam = controls.update(now);
+    origin = cam;
+    placeCamera(cam);
+  }
+  lastCam = cam;
+  lastOrigin = origin;
+
+  terrain.update(view, cam, xr.mode ? 1000 : el.clientHeight, origin);
+  sites.update(origin);
+  // Sites' near-side and distance tests use the true camera position.
+  sites.material.uniforms.uCam.value.set(origin[0], origin[1], origin[2]);
+  shapes.update(origin, controls.lon, controls.lat, xr.mode ? 1000 : controls.range);
+  assets.update(origin);
+  tools.update(origin, now);
+  renderer.render(scene, view);
+
+  if (++frame % 10 === 0 && !xr.mode) {
+    // Ground height under the target, and keep the camera above the ground.
+    const g = terrain.heightAt(controls.lon, controls.lat);
     if (g !== undefined) controls.h += (g - controls.h) * 0.5;
-    // Keep the camera above the ground.
-    const [clon, clat] = geodetic(cam);
-    const gc = groundHeight(clon, clat, cam);
-    const [, , hc] = geodetic(cam);
-    if (gc !== undefined && hc < gc + 20 && dot(sub(cam, target), up) < controls.range) {
+    const [clon, clat, hc] = geodetic(cam);
+    const gc = terrain.heightAt(clon, clat);
+    if (gc !== undefined && hc < gc + 5 && dot(sub(cam, controls.target()), enu(controls.lon, controls.lat)[2]) < controls.range) {
       controls.range *= 1.15;
     }
+    clusters.update(sites, camera, cam, el.clientWidth, el.clientHeight, controls.range);
+    saveUrl();
     const s = terrain.stats;
     stats.textContent = `${profile.name} · ${Math.round(adaptive.fps)} fps · detail ${adaptive.sse.toFixed(1)} px · scale ${adaptive.scale.toFixed(2)} · tiles ${s.rendered} drawn · level ${s.maxLevel} · ${s.loading} loading · ${s.gpuMB} MB · ${s.downloads} downloaded · ${s.hits} from cache · ${s.wasted} unused · ${s.aborted} aborted · ${controls.lat.toFixed(4)}, ${controls.lon.toFixed(4)} · ${Math.round(controls.range)} m`;
   }
-  requestAnimationFrame(tick);
-}
-
-/** AR or VR entry, offered only where WebXR supports it (PRD §4.2). */
-function showXr(d: Device): void {
-  const box = document.getElementById("xr")!;
-  const modes = [d.ar && "AR", d.vr && "VR"].filter(Boolean) as string[];
-  if (!modes.length) return;
-  box.hidden = false;
-  for (const m of modes) {
-    const b = document.createElement("button");
-    b.textContent = m === "AR" ? "View in AR" : "Enter VR";
-    // Browsers allow XR sessions only from a user tap; the sessions
-    // themselves come with milestone M4.
-    b.onclick = () => alert(`${m} mode comes with milestone M4 (see docs/ROADMAP.md).`);
-    box.appendChild(b);
+  if (frame % 30 === 0 && timeline) {
+    // Period picker: periods attested within about 300 km of the view (T5).
+    const local = new Set<number>();
+    const r = 300 / 111;
+    for (const s of sites.sites) {
+      if (Math.abs(s.lat - controls.lat) < r && Math.abs(s.lon - controls.lon) < r / Math.max(Math.cos((controls.lat * Math.PI) / 180), 0.2)) {
+        for (const p of s.periods) local.add(p);
+      }
+    }
+    timeline.setLocalPeriods(local);
   }
 }
 
@@ -192,27 +320,123 @@ async function main(): Promise<void> {
     sse: profile.sse, imagePx: profile.imagePx, budgetBytes: profile.budgetMB * 2 ** 20, meshStep: profile.meshStep,
   };
   showXr(device);
-  await terrain.init();
-  await sites.load(`${import.meta.env.BASE_URL}data/sites.json`);
-  const legend = document.getElementById("legend")!;
-  const hidden = new Set<string>();
+  await Promise.all([terrain.init(), sites.load(`${BASE}data/sites.json`), shapes.init(), assets.init()]);
+  sites.assetSites = assets.sitesWithAssets();
+
+  // Time (T1-T6).
+  timeline = new Timeline($("#time"), sites.periods);
+  timeline.onChange = (t) => {
+    sites.setTime(t);
+    shapes.setTime(t);
+    assets.setTime(t);
+    map2d.refresh();
+    saveUrl();
+  };
+
+  // Legend and category filter.
+  const legend = $("#legend");
   for (const c of sites.categories) {
     const label = document.createElement("label");
     label.innerHTML = `<input type="checkbox" checked><span class="dot" style="background:${CATEGORY_COLORS[c] ?? "#fff"}"></span>${c}`;
     const box = label.querySelector("input")!;
+    box.dataset.cat = c;
     box.onchange = () => {
-      if (box.checked) hidden.delete(c);
-      else hidden.add(c);
-      sites.setHidden(hidden);
+      if (box.checked) filters.hiddenCategories.delete(c);
+      else filters.hiddenCategories.add(c);
+      applyFilters();
     };
     legend.appendChild(label);
   }
-  updateTime();
-  requestAnimationFrame(tick);
+  legend.insertAdjacentHTML("beforeend", `<span class="conf-key"><span class="mk solid"></span>confidence 3+ <span class="mk ring"></span>2 <span class="mk dashed"></span>0–1</span>`);
+
+  // Country and confidence filters.
+  const country = $<HTMLSelectElement>("#f-country");
+  for (const c of [...sites.countries].sort()) country.add(new Option(c, c));
+  country.onchange = () => {
+    filters.country = country.value || null;
+    applyFilters();
+  };
+  document.querySelectorAll<HTMLSelectElement>("select[data-axis]").forEach((sel) => {
+    for (let v = 0; v <= 5; v++) sel.add(new Option(v === 0 ? "any" : `${v}+`, String(v)));
+    sel.onchange = () => {
+      filters.minConf[Number(sel.dataset.axis)] = Number(sel.value);
+      applyFilters();
+    };
+  });
+  const onlyShapes = $<HTMLInputElement>("#f-shapes");
+  const onlyAssets = $<HTMLInputElement>("#f-assets");
+  onlyShapes.onchange = () => {
+    filters.onlyShapes = onlyShapes.checked;
+    applyFilters();
+  };
+  onlyAssets.onchange = () => {
+    filters.onlyAssets = onlyAssets.checked;
+    applyFilters();
+  };
+
+  // Layers.
+  const shapesBox = $<HTMLInputElement>("#l-shapes");
+  shapesBox.onchange = () => (shapes.visible = shapesBox.checked);
+  const seaBox = $<HTMLInputElement>("#l-sea");
+  const seaLevel = $<HTMLInputElement>("#l-sealevel");
+  const seaOut = $<HTMLOutputElement>("#l-sealevel-out");
+  seaBox.onchange = async () => {
+    $(".sea-level").hidden = !seaBox.checked;
+    await terrain.setSeaFloor(seaBox.checked);
+  };
+  seaLevel.oninput = () => {
+    terrain.sea.uSeaLevel.value = Number(seaLevel.value);
+    seaOut.textContent = `${seaLevel.value} m`;
+  };
+  const box2d = $<HTMLInputElement>("#l-2d");
+  box2d.onchange = async () => {
+    if (box2d.checked) {
+      el.hidden = true;
+      clusters.clear();
+      await map2d.show(controls.lon, controls.lat, controls.range);
+    } else {
+      const v = map2d.hide();
+      el.hidden = false;
+      if (v) Object.assign(controls, { lon: v.lon, lat: v.lat, range: v.range });
+    }
+  };
+
+  // Search (S1) and share (S4).
+  const search = new Search($<HTMLInputElement>("#search"), sites.sites);
+  search.onPick = flyToSite;
+  $("#share").onclick = async () => {
+    Url.write({ view: controls.view(), time: timeline.state, filters, site: urlSite });
+    await new Promise((r) => setTimeout(r, 450));
+    try {
+      await navigator.clipboard.writeText(location.href);
+      $("#share").textContent = "Link copied";
+    } catch {
+      prompt("Link to this view", location.href);
+    }
+    setTimeout(() => ($("#share").textContent = "Copy link to this view"), 2000);
+  };
+
+  // Restore a shared view.
+  const u = Url.decode(location.hash);
+  if (u.view) Object.assign(controls, u.view);
+  if (u.time) timeline.set(u.time);
+  if (u.filters) {
+    Object.assign(filters, u.filters);
+    country.value = filters.country ?? "";
+    onlyShapes.checked = filters.onlyShapes;
+    onlyAssets.checked = filters.onlyAssets;
+    document.querySelectorAll<HTMLSelectElement>("select[data-axis]").forEach((sel) => (sel.value = String(filters.minConf[Number(sel.dataset.axis)])));
+    legend.querySelectorAll<HTMLInputElement>("input[data-cat]").forEach((b) => (b.checked = !filters.hiddenCategories.has(b.dataset.cat!)));
+    applyFilters();
+  }
+  if (u.site && sites.byId.has(u.site)) showSite(sites.byId.get(u.site)!);
+  timeline.onChange(timeline.state);
+
+  renderer.setAnimationLoop(tick);
 }
 
 main();
 
 if (import.meta.env.DEV) {
-  Object.assign(window, { atlas: { terrain, sites, controls, camera, renderer, scene, device, profile, adaptive } });
+  Object.assign(window, { atlas: { terrain, sites, shapes, assets, tools, controls, camera, renderer, scene, device, profile, adaptive, xr, world } });
 }

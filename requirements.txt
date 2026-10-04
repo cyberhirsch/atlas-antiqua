@@ -1,5 +1,9 @@
 ijson==3.5.1
+laspy==2.7.0
+lazrs==0.8.2
 numpy==2.5.3
 pillow==12.3.0
+pygltflib==1.16.5
 pyproj==3.8.0
 rasterio==1.5.2
+trimesh==5.1.1

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Atlas Antiqua coverage</title>
+    <style>
+      :root { color-scheme: dark; font-family: "Inter", system-ui, sans-serif; }
+      body { margin: 0; background: #050608; color: #e8e6e1; }
+      main { max-width: 960px; margin: 0 auto; padding: 24px 16px 48px; }
+      h1 { font-size: 22px; margin: 0 0 4px; }
+      h2 { font-size: 15px; margin: 28px 0 8px; color: #9a9890; }
+      p { color: #9a9890; font-size: 13px; }
+      a { color: #f2c14e; }
+      .totals { display: flex; flex-wrap: wrap; gap: 16px; margin: 16px 0; }
+      .totals div { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; padding: 10px 14px; }
+      .totals b { display: block; font-size: 20px; }
+      .bars { display: grid; grid-template-columns: minmax(120px, 220px) 1fr 60px; gap: 3px 10px; font-size: 12px; align-items: center; }
+      .bar { height: 10px; background: #f2c14e; border-radius: 2px; }
+      .num { text-align: right; font-variant-numeric: tabular-nums; color: #9a9890; }
+      .periods .bar { background: #7fc7ff; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Atlas Antiqua coverage</h1>
+      <p>Sites per country and per period, from the current data (PRD D5). <a href="./">Back to the map</a></p>
+      <div class="totals" id="totals"></div>
+      <h2>Sites per country</h2>
+      <div class="bars" id="countries"></div>
+      <h2>Sites per period (Pleiades periods, earliest first; years in HE)</h2>
+      <div class="bars periods" id="periods"></div>
+    </main>
+    <script type="module" src="/src/coverage.ts"></script>
+  </body>
+</html>

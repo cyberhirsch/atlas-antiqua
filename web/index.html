@@ -8,35 +8,76 @@
   </head>
   <body>
     <div id="view"></div>
+    <div id="map2d" hidden></div>
 
-    <header class="panel" id="places">
+    <header class="panel" id="side">
       <h1>Atlas Antiqua</h1>
-      <p class="hint">Drag or W A S D to move · right drag or Q E to turn · middle drag to look around · wheel or R F to zoom</p>
-      <h2>High-resolution areas</h2>
-      <ul id="place-list"></ul>
+      <input id="search" type="search" placeholder="Search sites, also by ancient names" autocomplete="off" />
+      <p class="hint">Drag or W A S D to move · right drag or Q E to turn · middle drag to look around · wheel or R F to zoom · two fingers on touch screens</p>
+
+      <details open>
+        <summary>High-resolution areas</summary>
+        <ul id="place-list"></ul>
+      </details>
+
+      <details>
+        <summary>Filters</summary>
+        <label>Country <select id="f-country"><option value="">All countries</option></select></label>
+        <fieldset class="conf">
+          <legend>Minimum confidence</legend>
+          <label>Identity <select data-axis="0"></select></label>
+          <label>Position <select data-axis="1"></select></label>
+          <label>Elevation <select data-axis="2"></select></label>
+          <label>Time <select data-axis="3"></select></label>
+        </fieldset>
+        <label class="check"><input type="checkbox" id="f-shapes" /> Only sites with outline shapes</label>
+        <label class="check"><input type="checkbox" id="f-assets" /> Only sites with 3D scans</label>
+      </details>
+
+      <details>
+        <summary>Layers</summary>
+        <label class="check"><input type="checkbox" id="l-shapes" checked /> Outline shapes</label>
+        <label class="check"><input type="checkbox" id="l-sea" /> Sea floor (ETOPO 2022)</label>
+        <label class="sea-level" hidden>Sea level <input type="range" id="l-sealevel" min="-130" max="10" step="1" value="0" /> <output id="l-sealevel-out">0 m</output></label>
+        <label class="check"><input type="checkbox" id="l-2d" /> 2D map (for slow devices)</label>
+      </details>
+
+      <details>
+        <summary>Tools</summary>
+        <div class="tools" id="tools">
+          <button id="tool-select">Select area</button>
+          <button id="tool-line">Draw line</button>
+          <button id="tool-area">Draw area</button>
+          <button id="tool-list">My features</button>
+          <label class="button">Import file<input type="file" id="tool-import" accept=".geojson,.json,.kml,.zip,.shp" multiple hidden /></label>
+          <button id="tool-export">Export GeoJSON</button>
+        </div>
+      </details>
+
+      <p class="links"><a href="coverage.html">Coverage report</a> · <a href="downloads/atlas-antiqua-sites.csv.gz">Download sites (CSV)</a> · <a href="downloads/ATTRIBUTION.md">Attribution</a> · <button id="share" class="link">Copy link to this view</button></p>
     </header>
 
     <aside class="panel" id="info" hidden>
-      <button id="info-close" aria-label="Close">×</button>
+      <button id="info-close" class="close" aria-label="Close">×</button>
       <div id="info-body"></div>
     </aside>
+    <aside class="panel" id="tool-panel" hidden></aside>
 
-    <section class="panel" id="time">
-      <label class="all"><input type="checkbox" id="all-dates" checked /> All dates</label>
-      <input type="range" id="year" min="0" max="12026" step="1" value="10100" />
-      <output id="year-label"></output>
-      <div id="legend"></div>
-    </section>
+    <section class="panel" id="time"></section>
+    <div id="legend"></div>
+
+    <div id="xr" hidden></div>
+    <div id="xr-overlay" hidden></div>
 
     <footer id="credits">
       Imagery: <a href="https://s2maps.eu">Sentinel-2 cloudless 2016</a> by EOX (CC BY 4.0, contains modified
       Copernicus Sentinel data 2016); Bavaria: DOP40 and DGM1 ©
       <a href="https://geodaten.bayern.de">Bayerische Vermessungsverwaltung</a> (CC BY 4.0) ·
       Terrain: Copernicus DEM GLO-30 © DLR, Airbus (Copernicus, EU and ESA); ETOPO 2022, NOAA NCEI ·
-      Sites: <a href="https://pleiades.stoa.org">Pleiades</a> (CC BY 3.0)
+      Sites: <a href="https://pleiades.stoa.org">Pleiades</a> (CC BY 3.0) · Countries: Natural Earth ·
+      3D: see each scan's credit
     </footer>
 
-    <div id="xr" hidden></div>
     <div id="stats"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>

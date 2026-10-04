@@ -12,7 +12,7 @@ import * as THREE from "three";
 import { Vec3, dot, ecef, geodetic, length, sub } from "./geo";
 
 const BASE = import.meta.env.BASE_URL;
-const TERRAIN_URL = `${BASE}tiles/terrain`;
+const TILES_URL = `${BASE}tiles`;
 const EOX_URL = "https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless/default/WGS84";
 const DOP40_URL = "https://geoservices.bayern.de/od/wms/dop/v1/dop40";
 
@@ -58,6 +58,7 @@ class Tile {
   usedAt = 0; // performance.now() of the last frame that needed it
   bytes = 0;
   drawn = false;
+  heights?: Float32Array; // full-resolution samples, kept for height lookups
   refined = false; // replaced by its children in the last frame
   abort?: AbortController;
   failedAt = 0;
@@ -153,12 +154,61 @@ export class Terrain {
   quality = { sse: 2.5, imagePx: 512, budgetBytes: 300 * 2 ** 20, meshStep: 1 };
   stats = { rendered: 0, loading: 0, maxLevel: 0, gpuMB: 0, hits: 0, downloads: 0, wasted: 0, aborted: 0 };
 
+  /** Tile set: "terrain" (sea surface at 0) or "terrain-sea" (ETOPO sea floor, G6). */
+  private set = "terrain";
+  /** Water below this EGM2008 height is tinted (sea-floor set only). */
+  readonly sea = { uSeaOn: { value: 0 }, uSeaLevel: { value: 0 } };
+  private occlusion = new Map<Tile, { frame: number; hidden: boolean }>();
+  /** Hide terrain (AR on site shows the camera image instead). */
+  visible = true;
+
   async init(): Promise<void> {
-    this.regions = await (await fetch(`${TERRAIN_URL}/regions.json`, { cache: "no-cache" })).json();
+    this.regions = await (await fetch(`${TILES_URL}/${this.set}/regions.json`, { cache: "no-cache" })).json();
     // A rebuilt tile set gets a new cache, so stale tiles are never shown.
-    this.terrainCache.open(`atlas-terrain-${this.regions.built ?? "dev"}`);
+    this.terrainCache.open(`atlas-${this.set}-${this.regions.built ?? "dev"}`);
     this.imageryCache.open("atlas-imagery-v1");
     this.roots = [this.tile(0, 0, 0), this.tile(0, 1, 0)];
+  }
+
+  /** Switch between the plain terrain and the sea-floor set (G6). */
+  async setSeaFloor(on: boolean): Promise<void> {
+    const set = on ? "terrain-sea" : "terrain";
+    this.sea.uSeaOn.value = on ? 1 : 0;
+    if (set === this.set) return;
+    for (const t of this.loading) t.abort?.abort();
+    for (const t of [...this.tiles.values()]) {
+      if (t.mesh) this.dispose(t);
+      else this.tiles.delete(t.key);
+    }
+    this.rendered = [];
+    this.occlusion.clear();
+    this.set = set;
+    await this.init();
+  }
+
+  /**
+   * Terrain height (m above the ellipsoid) at lon/lat from the finest loaded
+   * tile, bilinear; undefined before the root tiles have loaded.
+   */
+  heightAt(lon: number, lat: number): number | undefined {
+    const root = this.roots.find((r) => r.contains(lon, lat));
+    if (!root?.heights) return undefined;
+    let t: Tile = root;
+    for (;;) {
+      const kid: Tile | undefined = t.kids?.find((k) => k.heights !== undefined && k.contains(lon, lat));
+      if (!kid) break;
+      t = kid;
+    }
+    const n = this.regions.samples;
+    const c = ((lon - t.w) / (t.e - t.w)) * (n - 1);
+    const r = ((t.n - lat) / (t.n - t.s)) * (n - 1);
+    const c0 = Math.min(Math.max(Math.floor(c), 0), n - 2);
+    const r0 = Math.min(Math.max(Math.floor(r), 0), n - 2);
+    const fc = c - c0;
+    const fr = r - r0;
+    const h = t.heights!;
+    return h[r0 * n + c0] * (1 - fr) * (1 - fc) + h[r0 * n + c0 + 1] * (1 - fr) * fc
+      + h[(r0 + 1) * n + c0] * fr * (1 - fc) + h[(r0 + 1) * n + c0 + 1] * fr * fc;
   }
 
   /** Meshes currently drawn, for ground picking. */
@@ -190,7 +240,13 @@ export class Terrain {
     );
   }
 
-  update(camera: THREE.PerspectiveCamera, cam: Vec3, screenHeight: number): void {
+  /**
+   * Choose and position tiles. cam: camera position (ECEF) for level of
+   * detail and culling; origin: floating origin that meshes are placed
+   * relative to (the camera, or the XR anchor).
+   */
+  update(camera: THREE.PerspectiveCamera, cam: Vec3, screenHeight: number, origin: Vec3 = cam): void {
+    this.group.visible = this.visible;
     this.frame++;
     this.cam = cam;
     this.nadir = geodetic(cam);
@@ -243,7 +299,7 @@ export class Terrain {
       const m = t.mesh!;
       m.visible = true;
       t.drawn = true;
-      m.position.set(t.center[0] - cam[0], t.center[1] - cam[1], t.center[2] - cam[2]);
+      m.position.set(t.center[0] - origin[0], t.center[1] - origin[1], t.center[2] - origin[2]);
     }
     this.rendered = render;
     this.cancelStale();
@@ -280,7 +336,36 @@ export class Terrain {
     // Beyond the horizon: the Earth hides every probe at the tile's highest
     // point. The Earth is a sphere just inside the ellipsoid, so this never
     // hides anything visible.
-    return t.top.every((p) => occluded(cam, p));
+    if (t.top.every((p) => occluded(cam, p))) return true;
+    return t.z >= 9 && this.hiddenByTerrain(t);
+  }
+
+  /**
+   * Hidden behind terrain (a mountain in front of a valley): every probe at
+   * the tile's top is blocked by loaded terrain along the line of sight.
+   * Checked every 15 frames per tile; only when the camera is near the
+   * ground, where it matters.
+   */
+  private hiddenByTerrain(t: Tile): boolean {
+    const [lon, lat, h] = this.nadir;
+    const ground = this.heightAt(lon, lat);
+    if (ground === undefined || h - ground > 5000) return false;
+    const cached = this.occlusion.get(t);
+    if (cached && this.frame - cached.frame < 15) return cached.hidden;
+    const cam = this.cam;
+    const blocked = (p: Vec3) => {
+      for (let i = 1; i < 12; i++) {
+        const f = i / 12;
+        const q: Vec3 = [cam[0] + (p[0] - cam[0]) * f, cam[1] + (p[1] - cam[1]) * f, cam[2] + (p[2] - cam[2]) * f];
+        const [qlon, qlat, qh] = geodetic(q);
+        const g = this.heightAt(qlon, qlat);
+        if (g !== undefined && qh < g - 10) return true;
+      }
+      return false;
+    };
+    const hidden = t.top.every(blocked);
+    this.occlusion.set(t, { frame: this.frame, hidden });
+    return hidden;
   }
 
   private request(t: Tile): void {
@@ -389,7 +474,7 @@ export class Terrain {
   }
 
   private async load(t: Tile, signal: AbortSignal): Promise<void> {
-    const [heights, image] = await Promise.all([
+    const [{ h: heights, geoid }, image] = await Promise.all([
       this.heights(t, signal),
       this.imagery(t, signal).catch((err) => {
         if (signal.aborted) throw err;
@@ -423,7 +508,8 @@ export class Terrain {
         for (let c = 0; c < m; c++) grid[r * m + c] = heights[r * step * n + c * step];
       }
     }
-    const geometry = this.geometry(t, grid, m);
+    const geometry = this.geometry(t, grid, m, geoid);
+    t.heights = heights;
     const map = new THREE.Texture(image);
     map.flipY = false;
     map.colorSpace = THREE.SRGBColorSpace;
@@ -431,7 +517,7 @@ export class Terrain {
     map.generateMipmaps = true;
     map.minFilter = THREE.LinearMipmapLinearFilter;
     map.needsUpdate = true;
-    const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ map, side: THREE.DoubleSide }));
+    const mesh = new THREE.Mesh(geometry, this.material(map));
     mesh.visible = false;
     this.group.add(mesh);
     t.mesh = mesh;
@@ -440,21 +526,43 @@ export class Terrain {
     this.gpuBytes += t.bytes;
   }
 
-  private async heights(t: Tile, signal: AbortSignal): Promise<Float32Array> {
+  private async heights(t: Tile, signal: AbortSignal): Promise<{ h: Float32Array; geoid?: Float32Array }> {
     // gzip of int32 decimetre deltas (scripts/build_terrain.py). Not an
     // image: browsers may alter image colours, which corrupts packed heights.
-    const buf = await this.terrainCache.get(`${TERRAIN_URL}/${t.key}.hgt`, signal);
+    // Sea-floor tiles append 9 x 9 geoid heights (absolute decimetres).
+    const buf = await this.terrainCache.get(`${TILES_URL}/${this.set}/${t.key}.hgt`, signal);
     const raw = await new Response(new Blob([buf]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
     const d = new Int32Array(raw);
     const n = this.regions.samples;
-    if (d.length !== n * n) throw new Error(`terrain ${t.key}: ${d.length} samples`);
+    if (d.length !== n * n && d.length !== n * n + 81) throw new Error(`terrain ${t.key}: ${d.length} samples`);
     const h = new Float32Array(n * n);
     let v = 0;
     for (let i = 0; i < n * n; i++) {
       v += d[i];
       h[i] = v / 10;
     }
-    return h;
+    const geoid = d.length > n * n ? Float32Array.from(d.subarray(n * n), (x) => x / 10) : undefined;
+    return { h, geoid };
+  }
+
+  /** Imagery material; with the sea-floor set, ground below sea level is tinted as water. */
+  private material(map: THREE.Texture): THREE.MeshBasicMaterial {
+    const mat = new THREE.MeshBasicMaterial({ map, side: THREE.DoubleSide });
+    mat.onBeforeCompile = (shader) => {
+      Object.assign(shader.uniforms, this.sea);
+      shader.vertexShader = shader.vertexShader
+        .replace("#include <common>", "#include <common>\nattribute float aOrtho;\nvarying float vOrtho;")
+        .replace("#include <begin_vertex>", "#include <begin_vertex>\nvOrtho = aOrtho;");
+      shader.fragmentShader = shader.fragmentShader
+        .replace("#include <common>", "#include <common>\nuniform float uSeaOn;\nuniform float uSeaLevel;\nvarying float vOrtho;")
+        .replace("#include <map_fragment>", `#include <map_fragment>
+          if (uSeaOn > 0.5 && vOrtho < uSeaLevel) {
+            float depth = clamp((uSeaLevel - vOrtho) / 200.0, 0.0, 1.0);
+            diffuseColor.rgb = mix(diffuseColor.rgb, mix(vec3(0.16, 0.42, 0.55), vec3(0.03, 0.12, 0.25), depth), 0.82);
+          }`);
+    };
+    mat.customProgramCacheKey = () => "atlas-terrain-sea";
+    return mat;
   }
 
   private async imagery(t: Tile, signal: AbortSignal): Promise<ImageBitmap> {
@@ -478,10 +586,23 @@ export class Terrain {
     return createImageBitmap(new Blob([buf], { type: "image/jpeg" }));
   }
 
-  private geometry(t: Tile, h: Float32Array, n: number): THREE.BufferGeometry {
+  private geometry(t: Tile, h: Float32Array, n: number, geoid?: Float32Array): THREE.BufferGeometry {
     const count = n * n + 4 * n;
     const pos = new Float32Array(count * 3);
     const uv = new Float32Array(count * 2);
+    // Height above sea level (EGM2008) per vertex, for the water tint.
+    const ortho = new Float32Array(count).fill(1e4);
+    const geoidAt = (u: number, v: number) => {
+      if (!geoid) return 0;
+      const c = Math.min(u * 8, 7.999);
+      const r = Math.min(v * 8, 7.999);
+      const c0 = Math.floor(c);
+      const r0 = Math.floor(r);
+      const fc = c - c0;
+      const fr = r - r0;
+      return geoid[r0 * 9 + c0] * (1 - fr) * (1 - fc) + geoid[r0 * 9 + c0 + 1] * (1 - fr) * fc
+        + geoid[(r0 + 1) * 9 + c0] * fr * (1 - fc) + geoid[(r0 + 1) * 9 + c0 + 1] * fr * fc;
+    };
     const [cx, cy, cz] = t.center;
     const put = (i: number, lon: number, lat: number, height: number, u: number, v: number) => {
       const p = ecef(lon, lat, height);
@@ -490,6 +611,7 @@ export class Terrain {
       pos[3 * i + 2] = p[2] - cz;
       uv[2 * i] = u;
       uv[2 * i + 1] = v;
+      if (geoid) ortho[i] = height - geoidAt(u, v);
     };
     for (let r = 0; r < n; r++) {
       const lat = t.n - ((t.n - t.s) * r) / (n - 1);
@@ -534,6 +656,7 @@ export class Terrain {
     const g = new THREE.BufferGeometry();
     g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
     g.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
+    g.setAttribute("aOrtho", new THREE.BufferAttribute(ortho, 1));
     g.setIndex(index);
     g.computeBoundingSphere();
     return g;

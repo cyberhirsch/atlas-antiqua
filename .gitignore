@@ -28,3 +28,6 @@ web/node_modules/
 web/dist/
 web/public/tiles/
 web/public/data/
+web/public/assets/*.glb
+web/public/assets/*.ply
+web/public/downloads/
