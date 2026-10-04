@@ -63,4 +63,6 @@ Licences and coverage still to be checked for each:
 
 ## Status
 
-Empty project. See [docs/PRD.md](docs/PRD.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
+Early prototype. Live test viewer: https://cyberhirsch.github.io/atlas-antiqua/
+(deploy with `scripts/deploy_pages.sh`). See [docs/PRD.md](docs/PRD.md) and
+[docs/ROADMAP.md](docs/ROADMAP.md).
