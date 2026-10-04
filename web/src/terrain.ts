@@ -18,6 +18,8 @@ const DOP40_URL = "https://geoservices.bayern.de/od/wms/dop/v1/dop40";
 
 const MAX_LOADS = 10;             // concurrent tile loads
 const ABORT_AFTER = 30;           // frames a loading tile may go unused
+const LOAD_TIMEOUT = 20000;       // ms before a hanging load is aborted and retried
+const RETRY_AFTER = 10000;        // ms before a failed tile is tried again
 const MAX_HEIGHT = 9000;          // upper bound before a tile's heights are known
 const MIN_HEIGHT = -500;
 
@@ -54,6 +56,7 @@ class Tile {
   bytes = 0;
   drawn = false;
   abort?: AbortController;
+  failedAt = 0;
 
   constructor(readonly z: number, readonly x: number, readonly y: number, samples: number,
     public minH = MIN_HEIGHT, public maxH = MAX_HEIGHT) {
@@ -271,6 +274,7 @@ export class Terrain {
   }
 
   private request(t: Tile): void {
+    if (t.state === "failed" && performance.now() - t.failedAt > RETRY_AFTER) t.state = "empty";
     if (t.state === "empty") this.queue.set(t.key, t);
   }
 
@@ -291,22 +295,30 @@ export class Terrain {
     this.queue.clear();
     for (const [, t] of wanted.slice(0, MAX_LOADS - this.loading.size)) {
       t.state = "loading";
-      t.abort = new AbortController();
+      const abort = new AbortController();
+      t.abort = abort;
       this.loading.add(t);
-      this.load(t, t.abort.signal)
+      // A step that never settles (e.g. image decoding started in a hidden
+      // tab) would block the tile forever; abort it and let it retry.
+      const timer = setTimeout(() => abort.abort(), LOAD_TIMEOUT);
+      const aborted = new Promise<never>((_, reject) =>
+        abort.signal.addEventListener("abort", () => reject(new Error("aborted"))));
+      Promise.race([this.load(t, abort.signal), aborted])
         .then(() => {
           t.state = "ready";
           this.loaded++;
         })
         .catch((err) => {
-          if (t.abort?.signal.aborted) {
+          if (abort.signal.aborted) {
             t.state = "empty";
           } else {
             console.warn(`tile ${t.key}`, err);
             t.state = "failed";
+            t.failedAt = performance.now();
           }
         })
         .finally(() => {
+          clearTimeout(timer);
           this.loading.delete(t);
           t.abort = undefined;
         });
